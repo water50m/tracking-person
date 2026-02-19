@@ -9,6 +9,18 @@ const nextConfig: NextConfig = {
         port: "8000",
         pathname: "/api/**",
       },
+      {
+        protocol: "http",
+        hostname: "127.0.0.1",
+        port: "9000",
+        pathname: "/cctv-analysis/**",
+      },
+      {
+        protocol: "http",
+        hostname: "localhost",
+        port: "9000",
+        pathname: "/cctv-analysis/**",
+      },
       // Allow backend URL from env
       ...(process.env.AI_BACKEND_URL
         ? [

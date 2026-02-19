@@ -147,6 +147,8 @@ function ResultCard({
   const [loaded, setLoaded] = useState(false);
   const conf = confidenceColor(result.confidence);
   const camColor = CAMERA_COLORS[result.camera_id] ?? "text-slate-400";
+  const thumbnailUrl = typeof result.thumbnail_url === "string" ? result.thumbnail_url : "";
+  const hasThumbnail = thumbnailUrl.trim().length > 0;
 
   return (
     <div
@@ -165,15 +167,23 @@ function ResultCard({
     >
       {/* Thumbnail */}
       <div className="absolute inset-0 bg-slate-900">
-        {!loaded && <ThumbnailSkeleton />}
-        <Image
-          src={result.thumbnail_url}
-          alt={result.clothing_class}
-          fill
-          className={`object-cover transition-all duration-300 ${loaded ? "opacity-100" : "opacity-0"} ${hovered ? "scale-105" : "scale-100"}`}
-          onLoad={() => setLoaded(true)}
-          unoptimized
-        />
+        {hasThumbnail ? (
+          <>
+            {!loaded && <ThumbnailSkeleton />}
+            <Image
+              src={thumbnailUrl}
+              alt={result.clothing_class}
+              fill
+              className={`object-cover transition-all duration-300 ${loaded ? "opacity-100" : "opacity-0"} ${hovered ? "scale-105" : "scale-100"}`}
+              onLoad={() => setLoaded(true)}
+              unoptimized
+            />
+          </>
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="font-mono text-[9px] text-slate-700">NO IMAGE</span>
+          </div>
+        )}
       </div>
 
       {/* Scanline */}

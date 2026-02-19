@@ -187,7 +187,7 @@ async def get_detections(
             rows = cur.fetchall()
             
             # Map to DetectionResponse format
-            minio_base = "http://127.0.0.1:9000/cctv-analysis"
+            minio_base = os.getenv("MINIO_BASE_URL", "http://127.0.0.1:9000/cctv-analysis")
             results = []
             for row in rows:
                 results.append(DetectionResponse(

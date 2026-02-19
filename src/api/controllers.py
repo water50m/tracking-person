@@ -4,12 +4,12 @@ from src.api.schemas import SearchCriteria, DetectionResponse, PersonTimeline, D
 from datetime import datetime
 import cv2
 import numpy as np
+import os
 
 class DetectionController:
     def __init__(self):
         self.db = DatabaseService()
-        # อย่าลืมแก้ IP ให้ตรงกับเครื่อง MinIO ของคุณ
-        self.minio_base = "http://127.0.0.1:9000/cctv-analysis" 
+        self.minio_base = os.getenv("MINIO_BASE_URL", "http://127.0.0.1:9000/cctv-analysis")
 
     def _get_select_columns(self):
         """ Helper เพื่อให้ SQL Select ข้อมูลลำดับเดียวกันเสมอ """
@@ -21,7 +21,7 @@ class DetectionController:
             id=str(row[0]),          # UUID -> String
             track_id=int(row[1]),
             timestamp=row[2],
-            image_url=f"{self.minio_base}/{row[3]}",
+            image_url=f"{self.minio_base}/{row[3]}" if row[3] else None,
             category=str(row[4]) if row[4] else "UNKNOWN",
             class_name=str(row[5]) if row[5] else "unknown",
             color_profile=row[6] if row[6] else {},
