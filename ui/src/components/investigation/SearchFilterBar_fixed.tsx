@@ -84,10 +84,6 @@ export default function SearchFilterBar() {
     }
   }, [filters.clothing, filters.colors, filters.logic, filters.threshold, filters.camera_id, filters.start_time, filters.end_time]);
 
-  const handleSearchClick = () => {
-    if (filters.clothing.length > 0 || filters.colors.length > 0) runSearch();
-  };
-
   const activeFilterCount =
     filters.clothing.length + filters.colors.length +
     (filters.camera_id ? 1 : 0) +
@@ -350,34 +346,6 @@ export default function SearchFilterBar() {
             </button>
           </div>
         )}
-
-        {/* Search Button */}
-        <button
-          onClick={handleSearchClick}
-          disabled={isSearching || (filters.clothing.length === 0 && filters.colors.length === 0)}
-          className={`
-            ml-auto flex items-center gap-2 px-5 py-2 rounded-sm border font-orbitron text-[10px] font-bold
-            tracking-[0.2em] transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed
-            ${isSearching
-              ? "border-cyan-700/60 bg-cyan-950/40 text-cyan-500 cursor-wait"
-              : "border-cyan-500/70 bg-cyan-950/30 text-cyan-400 hover:bg-cyan-900/40 hover:border-cyan-400 shadow-[0_0_10px_rgba(0,245,255,0.15)] hover:shadow-[0_0_20px_rgba(0,245,255,0.25)]"
-            }
-          `}
-        >
-          {isSearching ? (
-            <>
-              <Spinner />
-              SCANNING...
-            </>
-          ) : (
-            <>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-                <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
-              </svg>
-              SEARCH
-            </>
-          )}
-        </button>
       </div>
     </div>
   );

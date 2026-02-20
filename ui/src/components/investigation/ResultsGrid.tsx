@@ -153,6 +153,7 @@ function ResultCard({
   // Debug logging
   if (hasThumbnail) {
     console.log(`[ResultCard] Rendering image for ${result.id}:`, thumbnailUrl);
+    console.log(`[ResultCard] Thumbnail URL type:`, result.thumbnail_url);
   } else {
     console.log(`[ResultCard] No thumbnail for ${result.id}`);
   }

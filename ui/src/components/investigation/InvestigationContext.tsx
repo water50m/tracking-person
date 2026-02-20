@@ -4,6 +4,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useReducer,
   useRef,
 } from "react";
@@ -201,6 +202,16 @@ export function useInvestigation() {
 export function InvestigationProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const searchAbortRef = useRef<AbortController | null>(null);
+
+  // ── Auto search on mount ───────────────────────────────────
+  useEffect(() => {
+    // Auto search with default filters on component mount
+    const timer = setTimeout(() => {
+      runSearch();
+    }, 500); // Small delay to ensure component is mounted
+    
+    return () => clearTimeout(timer);
+  }, []);
 
   // ── Search ──────────────────────────────────────────────────
   const runSearch = useCallback(async () => {
