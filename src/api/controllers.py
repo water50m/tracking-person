@@ -9,7 +9,7 @@ import os
 class DetectionController:
     def __init__(self):
         self.db = DatabaseService()
-        self.minio_base = os.getenv("MINIO_BASE_URL", "http://127.0.0.1:9000/cctv-analysis")
+        self.minio_base = os.getenv("MINIO_BASE_URL", "http://myserver:9000")
 
     def _get_select_columns(self):
         """ Helper เพื่อให้ SQL Select ข้อมูลลำดับเดียวกันเสมอ """

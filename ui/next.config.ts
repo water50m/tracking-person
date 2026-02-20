@@ -11,27 +11,27 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: "http",
-        hostname: "127.0.0.1",
+        hostname: "myserver",
         port: "9000",
-        pathname: "/cctv-analysis/**",
+        pathname: "/**",
       },
       {
         protocol: "http",
         hostname: "localhost",
         port: "9000",
-        pathname: "/cctv-analysis/**",
+        pathname: "/**",
       },
       // Allow backend URL from env
       ...(process.env.AI_BACKEND_URL
         ? [
-            {
-              protocol: new URL(process.env.AI_BACKEND_URL).protocol.replace(
-                ":",
-                ""
-              ) as "http" | "https",
-              hostname: new URL(process.env.AI_BACKEND_URL).hostname,
-            },
-          ]
+          {
+            protocol: new URL(process.env.AI_BACKEND_URL).protocol.replace(
+              ":",
+              ""
+            ) as "http" | "https",
+            hostname: new URL(process.env.AI_BACKEND_URL).hostname,
+          },
+        ]
         : []),
       // Development: picsum for mock thumbnails
       { protocol: "https", hostname: "picsum.photos" },

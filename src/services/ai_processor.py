@@ -1,6 +1,7 @@
 import cv2
 import os
 import asyncio
+import uuid
 from src.ai.detector import PersonDetector       # Class เดิมของคุณ
 from src.ai.classifier import ClothingClassifier # Class เดิมของคุณ
 from src.services.database import DatabaseService
@@ -15,7 +16,11 @@ async def process_video_task(source: str, camera_id: str, video_id: str | None =
     detector = PersonDetector()
     classifier = ClothingClassifier()
     db = DatabaseService()
-    # storage = StorageService() # ถ้ามี
+    storage = None
+    try:
+        storage = StorageService()
+    except Exception as e:
+        print(f"⚠️ StorageService unavailable, thumbnails will not be saved: {e}")
 
     cap = None
     try:
@@ -76,10 +81,20 @@ async def process_video_task(source: str, camera_id: str, video_id: str | None =
                         color_profile = analyze_color_histogram(top_crop)
 
                     video_time_offset = frame_count / fps
+
+                    image_path = ""
+                    if storage is not None and person_crop is not None and person_crop.size != 0:
+                        object_name = f"detections/{camera_id}/{video_id or 'no-video'}/{frame_count}_{uuid.uuid4().hex}.jpg"
+                        uploaded = storage.upload_image(person_crop, object_name)
+                        if uploaded:
+                            image_path = uploaded
+                            print(f"📸 object_name: {object_name} | image_path: {image_path}")
+                        else:
+                            print(f"❌ Upload failed: {object_name}")
                     # Save to database
                     db.insert_detection(
                         track_id=frame_count,  # ใช้ frame_count เป็น track_id ชั่วคราว
-                        image_path="",  # ยังไม่ได้บันทึกรูป
+                        image_path=image_path,
                         category=category,  # บันทึก category ที่คำนวณแล้ว
                         class_name=clothing_type,
                         color_profile=color_profile,  # บันทึก color_profile ที่วิเคราะห์แล้ว

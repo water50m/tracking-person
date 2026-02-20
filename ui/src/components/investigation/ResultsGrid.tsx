@@ -18,10 +18,10 @@ function formatDate(iso: string) {
 }
 
 function confidenceColor(c: number) {
-  if (c >= 0.9) return { text: "text-green-400",  bg: "bg-green-500/20",  border: "border-green-500/40" };
-  if (c >= 0.75) return { text: "text-cyan-400",  bg: "bg-cyan-500/20",  border: "border-cyan-500/40" };
+  if (c >= 0.9) return { text: "text-green-400", bg: "bg-green-500/20", border: "border-green-500/40" };
+  if (c >= 0.75) return { text: "text-cyan-400", bg: "bg-cyan-500/20", border: "border-cyan-500/40" };
   if (c >= 0.6) return { text: "text-yellow-400", bg: "bg-yellow-500/20", border: "border-yellow-500/40" };
-  return             { text: "text-red-400",    bg: "bg-red-500/20",    border: "border-red-500/40" };
+  return { text: "text-red-400", bg: "bg-red-500/20", border: "border-red-500/40" };
 }
 
 const CAMERA_COLORS: Record<string, string> = {
@@ -149,6 +149,13 @@ function ResultCard({
   const camColor = CAMERA_COLORS[result.camera_id] ?? "text-slate-400";
   const thumbnailUrl = typeof result.thumbnail_url === "string" ? result.thumbnail_url : "";
   const hasThumbnail = thumbnailUrl.trim().length > 0;
+
+  // Debug logging
+  if (hasThumbnail) {
+    console.log(`[ResultCard] Rendering image for ${result.id}:`, thumbnailUrl);
+  } else {
+    console.log(`[ResultCard] No thumbnail for ${result.id}`);
+  }
 
   return (
     <div

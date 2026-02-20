@@ -187,7 +187,7 @@ async def get_detections(
             rows = cur.fetchall()
             
             # Map to DetectionResponse format
-            minio_base = os.getenv("MINIO_BASE_URL", "http://127.0.0.1:9000/cctv-analysis")
+            minio_base = os.getenv("MINIO_BASE_URL", "http://myserver:9000/cctv-analysis")
             results = []
             for row in rows:
                 results.append(DetectionResponse(
@@ -200,6 +200,7 @@ async def get_detections(
                     color_profile=row[6] if row[6] else {},
                     camera_id=str(row[7]) if row[7] else "N/A"
                 ))
+                # Log the generated URL for debugging
             
             return results
             
