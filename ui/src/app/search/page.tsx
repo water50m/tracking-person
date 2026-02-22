@@ -50,7 +50,7 @@ export default function SearchPage() {
   const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
   const [detectionDetail, setDetectionDetail] = useState<DetectionDetail | null>(null);
   const [imageTarget, setImageTarget] = useState<Detection | null>(null);
-  const [timeOffset, setTimeOffset] = useState<string | null>(null);
+  const [videoTimeOffset, setVideoTimeOffset] = useState<string | null>(null);
 
   // ดึงค่า video และ time จาก URL parameters
   useEffect(() => {
@@ -62,7 +62,6 @@ export default function SearchPage() {
     const clothing_class = urlParams.get('clothing_class');
     const color = urlParams.get('color');
     const confidence = urlParams.get('confidence');
-    const play = urlParams.get('play');
     
     if (videoId) {
       setSelectedVideo(videoId);
@@ -71,14 +70,8 @@ export default function SearchPage() {
       
       // ถ้ามี time parameter ให้ seek ไปที่เวลานั้น
       if (time) {
-        setTimeOffset(time); // เก็บค่า time offset ไว้ใช้ใน video player
+        setVideoTimeOffset(time);
         console.log(`Should seek to time: ${time}s for video: ${videoId}`);
-      }
-      
-      // ถ้ามี play=true ให้เล่น video อัตโนมัติ
-      if (play === "true") {
-        console.log(`Auto-playing video: ${videoId} at time: ${time}s`);
-        // TODO: Implement auto-play with seeking
       }
       
       // สร้าง imageTarget จาก URL parameters
@@ -332,23 +325,24 @@ export default function SearchPage() {
                       controls
                       className="w-full max-h-96"
                       src={`/api/video/videos/${video.id}/stream`}
-                      autoPlay={urlParams.get('play') === "true"}
                       ref={(videoElement) => {
-                        if (videoElement && timeOffset) {
+                        if (videoElement && videoTimeOffset) {
                           // Seek to time offset when video loads
                           videoElement.addEventListener('loadedmetadata', () => {
-                            videoElement.currentTime = parseFloat(timeOffset);
-                            // Auto-play if play parameter is true
-                            if (urlParams.get('play') === "true") {
-                              videoElement.play().catch(error => {
-                                console.log('Auto-play failed:', error);
-                              });
-                            }
+                            videoElement.currentTime = parseFloat(videoTimeOffset);
                           });
                         }
                       }}
                     >
-                      Your browser does not support video tag.
+                      Your browser does not support the video tag.
                     </video>
                   </div>
                 )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

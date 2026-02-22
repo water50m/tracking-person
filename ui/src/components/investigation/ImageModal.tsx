@@ -9,11 +9,16 @@ export default function ImageModal() {
   const { state, closeImage, openTrace, setDetectionDetail } = useInvestigation();
   const { imageTarget, detectionDetail } = state;
   const overlayRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [showVideo, setShowVideo] = useState(false);
+  
+  // สร้าง State สำหรับเก็บค่า Time Offset ที่ผู้ใช้สามารถปรับเพิ่ม/ลดได้
+  const [targetOffset, setTargetOffset] = useState<number>(0);
 
-  // Auto-show video if detectionDetail has video_id
+  // ตั้งค่า targetOffset เริ่มต้นให้เท่ากับค่าจาก API 
   useEffect(() => {
-    if (detectionDetail?.video_id) {
+    if (detectionDetail?.video_time_offset !== undefined) {
+      setTargetOffset(Number(detectionDetail.video_time_offset));
       setShowVideo(true);
     }
   }, [detectionDetail]);
@@ -25,7 +30,6 @@ export default function ImageModal() {
     return () => document.removeEventListener("keydown", handler);
   }, [closeImage]);
 
-  // Backdrop click close
   const handleOverlayClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.target === overlayRef.current) closeImage();
@@ -36,37 +40,68 @@ export default function ImageModal() {
   if (!imageTarget) return null;
 
   const handleOpenTrace = () => {
-    // Close image modal and open trace modal
     closeImage();
-    // Use the existing openTrace from context
     openTrace(imageTarget);
   };
 
   const openVideo = () => {
-    // Get video info from detectionDetail
     const videoId = detectionDetail?.video_id;
-    const timeOffset = detectionDetail?.video_time_offset;
 
     if (videoId) {
       if (showVideo) {
-        // If video is already showing, open in search page
         const params = new URLSearchParams({
           video: videoId,
-          time: timeOffset?.toString() || "0",
+          time: targetOffset.toString(), // ใช้ targetOffset ที่ถูกปรับแล้วแทนค่าเดิม
           timestamp: detectionDetail?.timestamp || imageTarget.timestamp,
           camera_id: detectionDetail?.camera_id || imageTarget.camera_id,
           clothing_class: detectionDetail?.class_name || imageTarget.clothing_class,
           color: detectionDetail?.category || imageTarget.color,
           confidence: (detectionDetail?.confidence || imageTarget.confidence)?.toString() || "0",
-          play: "true" // Add play parameter
+          play: "true"
         });
         window.open(`/search?${params.toString()}`, '_blank');
       } else {
-        // Show video in modal
         setShowVideo(true);
       }
     } else {
       alert('No video available for this detection');
+    }
+  };
+
+  // ----- ฟังก์ชันสำหรับจัดการ Time Offset -----
+  
+// 1. กระโดดไปที่ targetOffset ปัจจุบัน แล้วสั่ง Play
+  const jumpToTargetOffset = () => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = targetOffset;
+      
+      // เก็บค่า Promise ของการเล่นวิดีโอ
+      const playPromise = videoRef.current.play();
+
+      // ตรวจสอบว่าเบราว์เซอร์รองรับ Promise จาก play() ไหม (เบราว์เซอร์ยุคใหม่รองรับหมดแล้ว)
+      if (playPromise !== undefined) {
+        playPromise.catch((error) => {
+          if (error.name === 'AbortError') {
+            // ถ้าเป็น AbortError (กดหยุดก่อนเล่น) ให้เงียบไว้ หรือแค่ Log ขำๆ พอ
+            console.log("Play interrupted (e.g., user paused or closed the modal too quickly)");
+          } else {
+            // ถ้าเป็น Error อื่นๆ ค่อยแสดงออกมา
+            console.error("Video play error:", error);
+          }
+        });
+      }
+    }
+  };
+
+  // 2. ปรับเพิ่ม/ลด ตัวเลข targetOffset (ไม่ให้ติดลบ)
+  const adjustOffset = (seconds: number) => {
+    setTargetOffset(prev => Math.max(0, prev + seconds));
+  };
+
+  // 3. รีเซ็ตกลับไปเป็นค่าดั้งเดิมจาก API
+  const resetOffset = () => {
+    if (detectionDetail?.video_time_offset !== undefined) {
+      setTargetOffset(Number(detectionDetail.video_time_offset));
     }
   };
 
@@ -77,40 +112,42 @@ export default function ImageModal() {
       onClick={handleOverlayClick}
       style={{ animation: "fade-in 0.2s ease-out" }}
     >
-      {/* ขยายความกว้าง Modal เป็น max-w-7xl เพื่อรองรับ Layout แบบมี video */}
       <div
         className="relative w-full max-w-7xl max-h-[90vh] hud-panel flex flex-col overflow-hidden bg-slate-900/90"
         style={{ animation: "slide-in-up 0.3s ease-out" }}
       >
-        {/* Top accent line */}
         <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-500 to-transparent" />
 
-        {/* ── Header ── */}
+{/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/60 flex-shrink-0">
           <div>
-            {/* ปรับขนาด Header ให้ใหญ่ขึ้น */}
             <h2 className="font-orbitron text-lg font-bold text-cyan-400 tracking-[0.2em]">
               DETAIL VIEW
             </h2>
-            <p className="font-mono text-sm text-slate-400 mt-1 tracking-widest">
-              ID: {detectionDetail?.id || imageTarget.id} · {detectionDetail?.class_name || imageTarget.clothing_class} · {detectionDetail?.category || imageTarget.color}
-            </p>
+            
+            {/* ซ่อน ID และทำ 2 ค่าที่เหลือให้เป็น Tag เด่นๆ */}
+            <div className="flex items-center gap-3 mt-2.5">
+              <span className="px-3 py-1 bg-cyan-950/60 border border-cyan-700/50 rounded-sm font-mono text-sm font-bold text-cyan-300 uppercase tracking-widest shadow-[0_0_10px_rgba(6,182,212,0.15)]">
+                {detectionDetail?.class_name || imageTarget.clothing_class}
+              </span>
+              <span className="px-3 py-1 bg-purple-950/60 border border-purple-700/50 rounded-sm font-mono text-sm font-bold text-purple-300 uppercase tracking-widest shadow-[0_0_10px_rgba(168,85,247,0.15)]">
+                {detectionDetail?.category || imageTarget.color}
+              </span>
+            </div>
+            
           </div>
           <button
             onClick={closeImage}
             className="p-2 rounded-sm border border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300 transition-colors"
           >
-            {/* ขยายขนาด Icon กากบาท */}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-6 h-6">
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        {/* ── Body (แบ่งซ้าย-กลาง-ขวา) ── */}
         <div className="flex flex-col lg:flex-row flex-1 overflow-hidden min-h-0">
           
-          {/* ซ้าย: พื้นที่แสดงรูปภาพ */}
           <div className={`relative flex-1 min-h-[400px] md:min-h-[500px] transition-all duration-300 ${showVideo ? 'lg:w-1/2' : ''}`}>
             {(detectionDetail?.image_url || imageTarget.thumbnail_url) && (detectionDetail?.image_url || imageTarget.thumbnail_url)?.trim() !== "" ? (
               <Image
@@ -127,43 +164,36 @@ export default function ImageModal() {
                 </div>
               </div>
             )}
-            {/* Neon frame */}
             <div className="absolute inset-0 pointer-events-none border border-cyan-500/20" />
             <div className="absolute top-2 left-2 w-4 h-4 border-t-2 border-l-2 border-cyan-400/60" />
             <div className="absolute bottom-2 right-2 w-4 h-4 border-b-2 border-r-2 border-cyan-400/60" />
-            {/* Scanlines */}
             <div className="absolute inset-0 pointer-events-none"
               style={{ background: "repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.08) 3px,rgba(0,0,0,0.08) 4px)" }} />
           </div>
 
-          {/* กลาง: Video Player (แสดงเมื่อกดปุ่ม VIDEO) */}
           {showVideo && (
             <div className="relative lg:w-1/2 min-h-[400px] md:min-h-[500px] bg-black">
               <video
+                ref={videoRef}
                 controls
                 className="w-full h-full object-contain"
                 src={`/api/video/videos/${detectionDetail?.video_id}/stream`}
-                ref={(videoElement) => {
-                  if (videoElement && detectionDetail?.video_time_offset) {
-                    // Seek to time offset when video loads
-                    videoElement.addEventListener('loadedmetadata', () => {
-                      videoElement.currentTime = parseFloat(detectionDetail.video_time_offset.toString());
-                    });
+                onLoadedMetadata={() => {
+                  // ตอนโหลดวิดีโอครั้งแรก ให้กระโดดไปที่ Original Offset เลย
+                  if (videoRef.current && detectionDetail?.video_time_offset !== undefined) {
+                    videoRef.current.currentTime = Number(detectionDetail.video_time_offset);
                   }
                 }}
               >
                 Your browser does not support the video tag.
               </video>
-              {/* Video frame */}
               <div className="absolute inset-0 pointer-events-none border border-purple-500/20" />
               <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-purple-400/60" />
               <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-purple-400/60" />
             </div>
           )}
 
-          {/* ขวา: แถบรายละเอียดและปุ่ม */}
           <div className={`w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-800/60 bg-slate-950/50 flex flex-col flex-shrink-0 overflow-y-auto transition-all duration-300 ${showVideo ? 'lg:w-80' : ''}`}>
-            {/* ข้อมูลรายละเอียด */}
             <div className="p-6 flex-1 flex flex-col gap-6">
               <div>
                 <span className="font-mono text-sm text-slate-500 uppercase tracking-wider block mb-1">CAMERA</span>
@@ -172,13 +202,13 @@ export default function ImageModal() {
               <div>
                 <span className="font-mono text-sm text-slate-500 uppercase tracking-wider block mb-1">TIME</span>
                 <p className="font-mono text-slate-200 text-lg">
-                  {new Date(detectionDetail?.video_time_offset || imageTarget.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  {new Date(detectionDetail?.timestamp || imageTarget.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </p>
               </div>
               <div>
                 <span className="font-mono text-sm text-slate-500 uppercase tracking-wider block mb-1">DATE</span>
                 <p className="font-mono text-slate-200 text-lg">
-                  {new Date(detectionDetail?.video_time_offset || imageTarget.timestamp).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }).toUpperCase()}
+                  {new Date(detectionDetail?.timestamp || imageTarget.timestamp).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }).toUpperCase()}
                 </p>
               </div>
               <div>
@@ -187,20 +217,72 @@ export default function ImageModal() {
               </div>
 
               {detectionDetail?.video_id && (
-                <div className="mt-2 pt-6 border-t border-slate-800/60 flex flex-col gap-6">
+                <div className="mt-2 pt-6 border-t border-slate-800/60 flex flex-col gap-6 ">
                   <div>
                     <span className="font-mono text-sm text-slate-500 uppercase tracking-wider block mb-1">VIDEO ID</span>
                     <p className="font-mono text-purple-400 font-bold text-base break-all">{detectionDetail.video_id}</p>
                   </div>
                   <div>
-                    <span className="font-mono text-sm text-slate-500 uppercase tracking-wider block mb-1">TIME OFFSET</span>
-                    <p className="font-mono text-purple-400 font-bold text-lg">{detectionDetail.video_time_offset}s</p>
+                    <span className="font-mono text-sm text-slate-500 uppercase tracking-wider block mb-1">TARGET OFFSET</span>
+                    <div className="flex flex-col gap-3 mt-1">
+                      
+                      {/* บรรทัดแรก: แสดงค่า targetOffset เดี่ยวๆ */}
+                      <p className="font-mono text-purple-400 font-bold text-xl">
+                        {targetOffset.toFixed(2)}s
+                      </p>
+                      
+                      {showVideo && (
+                        <div className="flex flex-col gap-2 mt-1">
+                          {/* บรรทัดที่สอง: ปุ่มปรับ Offset (+, -, Reset) */}
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => adjustOffset(-1)}
+                              className="cursor-pointer px-3 py-1.5 bg-slate-800/80 text-slate-300 font-mono text-sm font-bold rounded hover:bg-slate-700 hover:text-white transition-colors border border-slate-700"
+                              title="Decrease target offset by 1s"
+                            >
+                              -1s
+                            </button>
+                            
+                            <button
+                              onClick={resetOffset}
+                              className="cursor-pointer flex-1 py-1.5 bg-purple-900/40 text-purple-400 font-mono text-sm font-bold tracking-widest rounded hover:bg-purple-800/60 hover:text-purple-300 transition-colors border border-purple-700/50 flex justify-center items-center gap-1.5"
+                              title="Reset to original offset"
+                            >
+                              <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                                <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+                              </svg>
+                              RESET
+                            </button>
+
+                            <button
+                              onClick={() => adjustOffset(1)}
+                              className="cursor-pointer px-3 py-1.5 bg-slate-800/80 text-slate-300 font-mono text-sm font-bold rounded hover:bg-slate-700 hover:text-white transition-colors border border-slate-700"
+                              title="Increase target offset by 1s"
+                            >
+                              +1s
+                            </button>
+                          </div>
+
+                          {/* บรรทัดที่สาม: ปุ่ม Play กระโดดไปที่เวลา (w-full) */}
+                          <button
+                            onClick={jumpToTargetOffset}
+                            className="cursor-pointer w-full py-2 bg-purple-600/20 text-purple-400 font-mono text-sm font-bold tracking-widest rounded hover:bg-purple-600/40 hover:text-purple-200 transition-colors border border-purple-500/50 flex justify-center items-center gap-2 mt-1"
+                            title="Jump to target offset and play"
+                          >
+                            <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                              <path d="M8 5v14l11-7z" />
+                            </svg>
+                            PLAY
+                          </button>
+                        </div>
+                      )}
+
+                    </div>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* ปุ่มกด (ย้ายมาไว้ล่างสุดของ Sidebar) */}
             <div className="p-4 border-t border-slate-800/60 flex flex-col gap-3">
               <button
                 onClick={handleOpenTrace}
