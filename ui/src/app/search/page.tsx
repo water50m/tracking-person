@@ -14,6 +14,20 @@ interface Detection {
   camera_id: string;
 }
 
+interface DetectionDetail {
+  track_id: number;
+  timestamp: string;
+  image_url: string;
+  category: string;
+  class_name: string;
+  color_profile: Record<string, number>;
+  camera_id: string;
+  id: string;
+  person_id: string | null;
+  video_id: string;
+  video_time_offset: number;
+}
+
 interface VideoInfo {
   id: string;
   camera_id: string;
@@ -34,6 +48,72 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"detections" | "videos">("detections");
   const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
+  const [detectionDetail, setDetectionDetail] = useState<DetectionDetail | null>(null);
+  const [imageTarget, setImageTarget] = useState<Detection | null>(null);
+  const [timeOffset, setTimeOffset] = useState<string | null>(null);
+
+  // ดึงค่า video และ time จาก URL parameters
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const videoId = urlParams.get('video');
+    const time = urlParams.get('time');
+    const timestamp = urlParams.get('timestamp');
+    const camera_id = urlParams.get('camera_id');
+    const clothing_class = urlParams.get('clothing_class');
+    const color = urlParams.get('color');
+    const confidence = urlParams.get('confidence');
+    
+    if (videoId) {
+      setSelectedVideo(videoId);
+      setActiveTab("videos"); // เปลี่ยนไปที่ video tab
+      setPlayingVideoId(videoId); // เริ่มเล่น video
+      
+      // ถ้ามี time parameter ให้ seek ไปที่เวลานั้น
+      if (time) {
+        setTimeOffset(time); // เก็บค่า time offset ไว้ใช้ใน video player
+        console.log(`Should seek to time: ${time}s for video: ${videoId}`);
+      }
+      
+      // สร้าง imageTarget จาก URL parameters
+      if (timestamp && camera_id && clothing_class && color && confidence) {
+        const mockImageTarget: Detection = {
+          id: 'from-url',
+          track_id: 0,
+          timestamp: timestamp,
+          image_url: undefined,
+          category: color,
+          class_name: clothing_class,
+          color_profile: {},
+          camera_id: camera_id
+        };
+        setImageTarget(mockImageTarget);
+      }
+    }
+  }, []);
+
+  // Fetch detection detail when imageTarget changes
+  useEffect(() => {
+    if (!imageTarget || imageTarget.id === 'from-url') {
+      setDetectionDetail(null);
+      return;
+    }
+
+    const fetchDetectionDetail = async () => {
+      try {
+        const response = await fetch(`/api/detections/${encodeURIComponent(imageTarget.id)}`);
+        if (!response.ok) {
+          throw new Error("Failed to fetch detection details");
+        }
+        const data = await response.json();
+        setDetectionDetail(data);
+      } catch (error) {
+        console.error("Error fetching detection detail:", error);
+        setDetectionDetail(null);
+      }
+    };
+
+    fetchDetectionDetail();
+  }, [imageTarget]);
 
   // ดึงข้อมูล detections
   const fetchDetections = async () => {
@@ -245,6 +325,14 @@ export default function SearchPage() {
                       controls
                       className="w-full max-h-96"
                       src={`/api/video/videos/${video.id}/stream`}
+                      ref={(videoElement) => {
+                        if (videoElement && timeOffset) {
+                          // Seek to time offset when video loads
+                          videoElement.addEventListener('loadedmetadata', () => {
+                            videoElement.currentTime = parseFloat(timeOffset);
+                          });
+                        }
+                      }}
                     >
                       Your browser does not support the video tag.
                     </video>

@@ -26,12 +26,15 @@ interface InvestigationState {
   hasMore: boolean;
   isSearching: boolean;
   isLoadingMore: boolean;
-  // Auto-fill
-  autoFillImage: string | null;       // data URL for preview
+  autoFillImage: string | null;
   autoFillStatus: "idle" | "analyzing" | "done" | "error";
   autoFillResult: AttributeDetectionResult | null;
   // Trace modal
   traceTarget: SearchResult | null;
+  // Image modal
+  imageTarget: SearchResult | null;
+  // Detection detail
+  detectionDetail: any | null;
 }
 
 const INITIAL_FILTERS: SearchFilters = {
@@ -56,6 +59,8 @@ const INITIAL_STATE: InvestigationState = {
   autoFillStatus: "idle",
   autoFillResult: null,
   traceTarget: null,
+  imageTarget: null,
+  detectionDetail: null,
 };
 
 // ─── Actions ──────────────────────────────────────────────────
@@ -82,7 +87,10 @@ type Action =
   | { type: "AUTOFILL_ERROR" }
   | { type: "CLEAR_AUTOFILL" }
   | { type: "OPEN_TRACE";  payload: SearchResult }
-  | { type: "CLOSE_TRACE" };
+  | { type: "CLOSE_TRACE" }
+  | { type: "OPEN_IMAGE";  payload: SearchResult }
+  | { type: "CLOSE_IMAGE" }
+  | { type: "SET_DETECTION_DETAIL"; payload: any | null };
 
 function reducer(state: InvestigationState, action: Action): InvestigationState {
   switch (action.type) {
@@ -163,6 +171,12 @@ function reducer(state: InvestigationState, action: Action): InvestigationState 
       return { ...state, traceTarget: action.payload };
     case "CLOSE_TRACE":
       return { ...state, traceTarget: null };
+    case "OPEN_IMAGE":
+      return { ...state, imageTarget: action.payload };
+    case "CLOSE_IMAGE":
+      return { ...state, imageTarget: null };
+    case "SET_DETECTION_DETAIL":
+      return { ...state, detectionDetail: action.payload };
     default:
       return state;
   }
@@ -187,6 +201,9 @@ interface InvestigationContextValue {
   clearAutoFill: () => void;
   openTrace: (result: SearchResult) => void;
   closeTrace: () => void;
+  openImage: (result: SearchResult) => void;
+  closeImage: () => void;
+  setDetectionDetail: (detail: any | null) => void;
 }
 
 const InvestigationContext = createContext<InvestigationContextValue | null>(null);
@@ -212,6 +229,30 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
     
     return () => clearTimeout(timer);
   }, []);
+
+  // ── Fetch detection detail when imageTarget changes ────────────────────────────────────
+  useEffect(() => {
+    if (!state.imageTarget) {
+      dispatch({ type: "SET_DETECTION_DETAIL", payload: null });
+      return;
+    }
+
+    const fetchDetectionDetail = async () => {
+      try {
+        const response = await fetch(`/api/detections/${encodeURIComponent(state.imageTarget!.id)}`);
+        if (!response.ok) {
+          throw new Error("Failed to fetch detection details");
+        }
+        const data = await response.json();
+        dispatch({ type: "SET_DETECTION_DETAIL", payload: data });
+      } catch (error) {
+        console.error("Error fetching detection detail:", error);
+        dispatch({ type: "SET_DETECTION_DETAIL", payload: null });
+      }
+    };
+
+    fetchDetectionDetail();
+  }, [state.imageTarget]);
 
   // ── Search ──────────────────────────────────────────────────
   const runSearch = useCallback(async () => {
@@ -320,9 +361,36 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
     }
   }, []);
 
-  const clearAutoFill = useCallback(() => dispatch({ type: "CLEAR_AUTOFILL" }), []);
-  const openTrace  = useCallback((r: SearchResult) => dispatch({ type: "OPEN_TRACE", payload: r }), []);
-  const closeTrace = useCallback(() => dispatch({ type: "CLOSE_TRACE" }), []);
+  // ─── Utils ────────────────────────────────────────────────────
+
+  function buildParams(filters: SearchFilters, page: number): string {
+    const p = new URLSearchParams();
+    filters.clothing.forEach((c) => p.append("clothing[]", c));
+    filters.colors.forEach((c) => p.append("colors[]", c));
+    p.set("logic", filters.logic);
+    p.set("threshold", filters.threshold.toString());
+    p.set("page", page.toString());
+    p.set("limit", "24");
+    if (filters.camera_id) p.set("camera_id", filters.camera_id);
+    if (filters.start_time) p.set("start_time", filters.start_time);
+    if (filters.end_time)   p.set("end_time", filters.end_time);
+    
+    // Always include clothing[] parameter even if empty
+    if (filters.clothing.length === 0) {
+      p.append("clothing[]", "");
+    }
+    
+    return p.toString();
+  }
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(new Error("Read failed"));
+      r.readAsDataURL(file);
+    });
+  }
 
   const value: InvestigationContextValue = {
     state,
@@ -340,9 +408,12 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
     runSearch,
     loadMore,
     submitAutoFill,
-    clearAutoFill,
-    openTrace,
-    closeTrace,
+    clearAutoFill: () => dispatch({ type: "CLEAR_AUTOFILL" }),
+    openTrace: (result) => dispatch({ type: "OPEN_TRACE", payload: result }),
+    closeTrace: () => dispatch({ type: "CLOSE_TRACE" }),
+    openImage: (result) => dispatch({ type: "OPEN_IMAGE", payload: result }),
+    closeImage: () => dispatch({ type: "CLOSE_IMAGE" }),
+    setDetectionDetail: (detail) => dispatch({ type: "SET_DETECTION_DETAIL", payload: detail }),
   };
 
   return (
@@ -350,29 +421,4 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
       {children}
     </InvestigationContext.Provider>
   );
-}
-
-// ─── Utils ────────────────────────────────────────────────────
-
-function buildParams(filters: SearchFilters, page: number): string {
-  const p = new URLSearchParams();
-  filters.clothing.forEach((c) => p.append("clothing[]", c));
-  filters.colors.forEach((c) => p.append("colors[]", c));
-  p.set("logic", filters.logic);
-  p.set("threshold", filters.threshold.toString());
-  p.set("page", page.toString());
-  p.set("limit", "24");
-  if (filters.camera_id) p.set("camera_id", filters.camera_id);
-  if (filters.start_time) p.set("start_time", filters.start_time);
-  if (filters.end_time)   p.set("end_time", filters.end_time);
-  return p.toString();
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(new Error("Read failed"));
-    r.readAsDataURL(file);
-  });
 }

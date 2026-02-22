@@ -45,8 +45,10 @@ class DatabaseService:
                     CREATE TABLE IF NOT EXISTS detections (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         track_id INT,
+                        person_id UUID,
                         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        image_path TEXT,
+                        image_url TEXT,
+                        category VARCHAR(50),
                         clothing_category VARCHAR(50),
                         class_name VARCHAR(100),
                         color_profile JSONB,
@@ -68,6 +70,7 @@ class DatabaseService:
                 # เพิ่มคอลัมน์ที่อาจขาดจาก schema เก่า (กัน runtime error จาก query ใหม่)
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_time_offset DOUBLE PRECISION;")
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_id TEXT;")
+                cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS person_id UUID;")
 
                 # ถ้าเคยสร้าง video_id เป็นชนิดอื่นไว้แล้ว (เช่น UUID) ให้แปลงเป็น TEXT เพื่อให้รองรับทั้ง id แบบเลข/uuid
                 try:
@@ -119,6 +122,7 @@ class DatabaseService:
         *,
         camera_id,
         track_id,
+        person_id=None,
         class_name,
         color_profile,
         image_path,
@@ -133,19 +137,21 @@ class DatabaseService:
             INSERT INTO detections (
                 camera_id,
                 track_id,
+                person_id,
                 clothing_category,
                 class_name,
                 color_profile,
-                image_path,
+                image_url,
                 video_time_offset,
                 video_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             with self.conn.cursor() as cur:
                 cur.execute(query, (
                     camera_id,
                     track_id,
+                    person_id,
                     category,
                     class_name,
                     Json(color_profile if color_profile is not None else {}),

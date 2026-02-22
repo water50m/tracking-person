@@ -234,17 +234,26 @@ class DetectionController:
     def trace_person(self, *, person_id: str):
         if self.db.conn is None:
             raise RuntimeError("Database not connected")
-        if not person_id.isdigit():
-            raise ValueError("person_id must be numeric track_id")
-
-        track_id = int(person_id)
+        
+        # Handle both numeric and string person IDs
+        try:
+            track_id = int(person_id)
+        except ValueError:
+            # If it's not numeric, try to find by person_id field
+            with self.db.conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT track_id FROM detections WHERE person_id = %s LIMIT 1",
+                    (person_id,),
+                )
+                result = cur.fetchone()
+                if not result:
+                    raise LookupError("Person not found")
+                track_id = result[0]
         with self.db.conn.cursor() as cur:
             cur.execute(
                 f"SELECT {self._get_select_columns()} FROM detections WHERE track_id = %s ORDER BY timestamp ASC",
                 (track_id,),
             )
-            rows = cur.fetchall()
-
         if not rows:
             raise LookupError("Person not found")
 
@@ -275,6 +284,32 @@ class DetectionController:
             "detections": detections,
             "cameras": sorted(list(set(cameras))),
             "attributes": {},
+        }
+
+    def get_detection_detail(self, detection_id: str):
+        """Get all details of a specific detection by ID"""
+        if self.db.conn is None:
+            raise RuntimeError("Database not connected")
+        
+        with self.db.conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {self._get_select_columns()}, person_id, video_id, video_time_offset FROM detections WHERE id = %s",
+                (detection_id,),
+            )
+            row = cur.fetchone()
+            
+        if not row:
+            raise LookupError("Detection not found")
+        
+        # Map to extended schema with additional fields
+        detection = self._map_to_schema(row)
+        
+        # Add additional fields
+        return {
+            **detection.__dict__,
+            "person_id": row[8] if len(row) > 8 else None,
+            "video_id": row[9] if len(row) > 9 else None,
+            "video_time_offset": row[10] if len(row) > 10 else None,
         }
 
     def get_hourly_stats(self) -> List[DailyStats]:
@@ -331,7 +366,6 @@ class DetectionController:
             }
             
         except Exception as e:
-            print(f"Error analyzing image: {e}")
             return {
                 "status": "error",
                 "message": str(e)

@@ -34,7 +34,7 @@ const CAMERA_COLORS: Record<string, string> = {
 // ─── Component ───────────────────────────────────────────────
 
 export default function ResultsGrid() {
-  const { state, loadMore, openTrace } = useInvestigation();
+  const { state, loadMore, openTrace, openImage } = useInvestigation();
   const { results, total, hasMore, isSearching, isLoadingMore, filters } = state;
 
   // Infinite scroll sentinel
@@ -99,7 +99,7 @@ export default function ResultsGrid() {
                   key={result.id}
                   result={result}
                   index={i}
-                  onClick={() => openTrace(result)}
+                  onClick={() => openImage(result)}
                 />
               ))}
             </div>
@@ -148,15 +148,27 @@ function ResultCard({
   const conf = confidenceColor(result.confidence);
   const camColor = CAMERA_COLORS[result.camera_id] ?? "text-slate-400";
   const thumbnailUrl = typeof result.thumbnail_url === "string" ? result.thumbnail_url : "";
-  const hasThumbnail = thumbnailUrl.trim().length > 0;
+  const hasThumbnail = thumbnailUrl && thumbnailUrl.trim().length > 0;
+  const { openTrace } = useInvestigation();
 
-  // Debug logging
-  if (hasThumbnail) {
-    console.log(`[ResultCard] Rendering image for ${result.id}:`, thumbnailUrl);
-    console.log(`[ResultCard] Thumbnail URL type:`, result.thumbnail_url);
-  } else {
-    console.log(`[ResultCard] No thumbnail for ${result.id}`);
-  }
+  const openVideoPlayer = () => {
+    // Get video info from result and navigate to search page
+    const videoId = result.video_id;
+    const timeOffset = result.video_time_offset;
+    
+    if (videoId) {
+      // Navigate to search page with video info
+      const params = new URLSearchParams({
+        video: videoId,
+        time: timeOffset?.toString() || "0"
+      });
+      window.open(`/search?${params.toString()}`, '_blank');
+    } else {
+      alert('No video available for this detection');
+    }
+  };
+
+
 
   return (
     <div
@@ -230,12 +242,30 @@ function ResultCard({
           {formatDate(result.timestamp)} {formatTime(result.timestamp)}
         </div>
 
-        {/* Trace button */}
+        {/* Action buttons */}
         {hovered && (
-          <button className="mt-1 w-full py-0.5 bg-cyan-950/60 border border-cyan-700/60 rounded-sm
-            font-mono text-[8px] text-cyan-400 hover:bg-cyan-900/60 transition-colors">
-            TRACE
-          </button>
+          <div className="mt-1 flex gap-1">
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                openTrace(result);
+              }}
+              className="flex-1 py-0.5 bg-cyan-950/60 border border-cyan-700/60 rounded-sm
+                font-mono text-[8px] text-cyan-400 hover:bg-cyan-900/60 transition-colors"
+            >
+              TRACE
+            </button>
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                openVideoPlayer();
+              }}
+              className="flex-1 py-0.5 bg-purple-950/60 border border-purple-700/60 rounded-sm
+                font-mono text-[8px] text-purple-400 hover:bg-purple-900/60 transition-colors"
+            >
+              VIDEO
+            </button>
+          </div>
         )}
       </div>
 

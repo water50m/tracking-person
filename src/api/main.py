@@ -4,6 +4,7 @@ from src.api.schemas import *
 from src.api.controllers import DetectionController
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.video_controller import router as video_router
+from src.api.routes.realtime import router as realtime_router
 
 controller = DetectionController()
 app = FastAPI(title="CCTV AI Analytics System")
@@ -18,6 +19,9 @@ app.add_middleware(
 
 # 1. ลงทะเบียน Router สำหรับรับ Video
 app.include_router(video_router, prefix="/api/video", tags=["Video Input"])
+
+# 2. ลงทะเบียน Router สำหรับ Real-time Events
+app.include_router(realtime_router, tags=["Real-time Events"])
 
 # 2. ลงทะเบียน Router เดิม (Search, Stats, etc.)
 # (สมมติว่าคุณแยก route ของ detection ไว้ในไฟล์อื่นก็ include มาแบบเดียวกัน)
@@ -74,6 +78,30 @@ async def person_detail(track_id: int):
 async def trace_person(person_id: str):
     try:
         return controller.trace_person(person_id=person_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/persons/{person_id}")
+async def get_person_by_id(person_id: str):
+    """Get person by UUID person_id"""
+    try:
+        return controller.trace_person(person_id=person_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/detections/{detection_id}")
+async def get_detection_detail(detection_id: str):
+    """Get all details of a specific detection by ID"""
+    try:
+        return controller.get_detection_detail(detection_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except LookupError as e:

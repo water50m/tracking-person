@@ -8,9 +8,9 @@ import { NextRequest, NextResponse } from "next/server";
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { personId: string } }
+  { params }: { params: Promise<{ personId: string }> }
 ) {
-  const { personId } = params;
+  const { personId } = await params;
 
   if (!personId || typeof personId !== "string") {
     return NextResponse.json({ error: "Invalid person ID" }, { status: 400 });

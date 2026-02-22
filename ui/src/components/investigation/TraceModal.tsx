@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useInvestigation } from "./InvestigationContext";
-import type { TraceResponse, TraceEvent } from "@/types";
+import type { TraceResponse, TraceEvent, SearchResult } from "@/types";
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -163,6 +163,7 @@ export default function TraceModal() {
           ) : traceData ? (
             <ModalBody
               trace={traceData}
+              traceTarget={traceTarget}
               selectedEvent={selectedEvent}
               onSelectEvent={setSelectedEvent}
             />
@@ -177,10 +178,12 @@ export default function TraceModal() {
 
 function ModalBody({
   trace,
+  traceTarget,
   selectedEvent,
   onSelectEvent,
 }: {
   trace: TraceResponse;
+  traceTarget: SearchResult;
   selectedEvent: TraceEvent | null;
   onSelectEvent: (e: TraceEvent) => void;
 }) {
@@ -197,10 +200,10 @@ function ModalBody({
       {/* ── Left: Enlarged image + attributes ── */}
       <div className="w-52 flex-shrink-0 flex flex-col border-r border-slate-800/60">
         {/* Image */}
-        <div className="relative flex-shrink-0" style={{ height: 240 }}>
-          {selectedEvent?.thumbnail_url ? (
+        <div className="relative flex-shrink-0" style={{ height: 320 }}>
+          {traceTarget?.thumbnail_url ? (
             <Image
-              src={selectedEvent.thumbnail_url}
+              src={traceTarget.thumbnail_url}
               alt="Target"
               fill
               className="object-cover"
@@ -218,12 +221,36 @@ function ModalBody({
           {/* Scanlines */}
           <div className="absolute inset-0 pointer-events-none"
             style={{ background: "repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.08) 3px,rgba(0,0,0,0.08) 4px)" }} />
-          {/* Confidence */}
-          {selectedEvent && (
-            <div className="absolute bottom-2 left-2 font-mono text-[8px] text-green-400 bg-slate-950/70 px-1.5 py-0.5 rounded-sm border border-green-800/60">
-              CONF {Math.round(selectedEvent.confidence * 100)}%
-            </div>
-          )}
+          {/* Action buttons */}
+          <div className="absolute bottom-2 left-2 right-2 flex gap-1">
+            <button 
+              className="flex-1 py-1.5 bg-cyan-950/60 border border-cyan-700/60 rounded-sm
+                font-mono text-[8px] text-cyan-400 hover:bg-cyan-900/60 transition-colors"
+            >
+              TRACE
+            </button>
+            <button 
+              onClick={() => {
+                // Get video info from traceTarget and navigate to search page
+                const videoId = traceTarget?.video_id;
+                const timeOffset = traceTarget?.video_time_offset;
+                
+                if (videoId) {
+                  const params = new URLSearchParams({
+                    video: videoId,
+                    time: timeOffset?.toString() || "0"
+                  });
+                  window.open(`/search?${params.toString()}`, '_blank');
+                } else {
+                  alert('No video available for this detection');
+                }
+              }}
+              className="flex-1 py-1.5 bg-purple-950/60 border border-purple-700/60 rounded-sm
+                font-mono text-[8px] text-purple-400 hover:bg-purple-900/60 transition-colors"
+            >
+              VIDEO
+            </button>
+          </div>
         </div>
 
         {/* Attributes */}

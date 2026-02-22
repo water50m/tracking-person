@@ -84,6 +84,10 @@ export default function SearchFilterBar() {
     }
   }, [filters.clothing, filters.colors, filters.logic, filters.threshold, filters.camera_id, filters.start_time, filters.end_time]);
 
+  const handleSearchClick = () => {
+    if (filters.clothing.length > 0 || filters.colors.length > 0) runSearch();
+  };
+
   const activeFilterCount =
     filters.clothing.length + filters.colors.length +
     (filters.camera_id ? 1 : 0) +
@@ -298,40 +302,39 @@ export default function SearchFilterBar() {
       {/* ── Row 3: Time range (collapsible) + Actions ── */}
       <div className="flex items-center gap-3 pt-1 border-t border-slate-800/60">
         {/* Time toggle */}
-        <div className="flex items-center gap-1.5 font-mono text-[9px] text-slate-500 hover:text-slate-300 transition-colors">
+        <button
+          onClick={() => setShowTimeExpanded((s) => !s)}
+          className="flex items-center gap-1.5 font-mono text-[9px] text-slate-500 hover:text-slate-300 transition-colors"
+        >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-3.5 h-3.5">
             <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
           </svg>
-          <input
-            type="datetime-local"
-            value={filters.start_time?.slice(0, 16) ?? ""}
-            onChange={(e) => setTimeRange(e.target.value ? new Date(e.target.value).toISOString() : undefined, filters.end_time)}
-            className="bg-slate-900/60 border border-slate-700/60 rounded-sm px-2 py-1
-              font-mono text-[9px] text-slate-300 outline-none focus:border-cyan-700/60 cursor-pointer"
-            style={{ 
-              WebkitAppearance: 'none', 
-              MozAppearance: 'textfield',
-              pointerEvents: 'auto'
-            }}
-            placeholder="Start date"
-            onClick={(e) => e.currentTarget.showPicker?.()}
-          />
-          <span className="font-mono text-[9px] text-slate-600">→</span>
-          <input
-            type="datetime-local"
-            value={filters.end_time?.slice(0, 16) ?? ""}
-            onChange={(e) => setTimeRange(filters.start_time, e.target.value ? new Date(e.target.value).toISOString() : undefined)}
-            className="bg-slate-900/60 border border-slate-700/60 rounded-sm px-2 py-1
-              font-mono text-[9px] text-slate-300 outline-none focus:border-cyan-700/60 cursor-pointer"
-            style={{ 
-              WebkitAppearance: 'none', 
-              MozAppearance: 'textfield',
-              pointerEvents: 'auto'
-            }}
-            placeholder="End date"
-            onClick={(e) => e.currentTarget.showPicker?.()}
-          />
-        </div>
+          TIME RANGE
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+            className={`w-3 h-3 transition-transform ${showTimeExpanded ? "rotate-180" : ""}`}>
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+
+        {showTimeExpanded && (
+          <div className="flex items-center gap-2 flex-1">
+            <input
+              type="datetime-local"
+              value={filters.start_time?.slice(0, 16) ?? ""}
+              onChange={(e) => setTimeRange(e.target.value ? new Date(e.target.value).toISOString() : undefined, filters.end_time)}
+              className="bg-slate-900/60 border border-slate-700/60 rounded-sm px-2 py-1
+                font-mono text-[9px] text-slate-300 outline-none focus:border-cyan-700/60"
+            />
+            <span className="font-mono text-[9px] text-slate-600">→</span>
+            <input
+              type="datetime-local"
+              value={filters.end_time?.slice(0, 16) ?? ""}
+              onChange={(e) => setTimeRange(filters.start_time, e.target.value ? new Date(e.target.value).toISOString() : undefined)}
+              className="bg-slate-900/60 border border-slate-700/60 rounded-sm px-2 py-1
+                font-mono text-[9px] text-slate-300 outline-none focus:border-cyan-700/60"
+            />
+          </div>
+        )}
 
         {/* Active filter summary */}
         {activeFilterCount > 0 && (
@@ -348,12 +351,32 @@ export default function SearchFilterBar() {
           </div>
         )}
 
-        {/* Clear All button - always visible */}
+        {/* Search Button */}
         <button
-          onClick={resetFilters}
-          className="cursor-pointer ml-auto font-mono text-[8px] font-bold px-3 py-1 rounded-sm border border-red-500/60 bg-red-950/30 text-red-400 hover:bg-red-900/40 hover:border-red-400 shadow-[0_0_8px_rgba(239,68,68,0.15)] hover:shadow-[0_0_16px_rgba(239,68,68,0.25)] transition-all duration-200"
+          onClick={handleSearchClick}
+          disabled={isSearching || (filters.clothing.length === 0 && filters.colors.length === 0)}
+          className={`
+            ml-auto flex items-center gap-2 px-5 py-2 rounded-sm border font-orbitron text-[10px] font-bold
+            tracking-[0.2em] transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed
+            ${isSearching
+              ? "border-cyan-700/60 bg-cyan-950/40 text-cyan-500 cursor-wait"
+              : "border-cyan-500/70 bg-cyan-950/30 text-cyan-400 hover:bg-cyan-900/40 hover:border-cyan-400 shadow-[0_0_10px_rgba(0,245,255,0.15)] hover:shadow-[0_0_20px_rgba(0,245,255,0.25)]"
+            }
+          `}
         >
-          CLEAR ALL
+          {isSearching ? (
+            <>
+              <Spinner />
+              SCANNING...
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+              </svg>
+              SEARCH
+            </>
+          )}
         </button>
       </div>
     </div>

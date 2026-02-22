@@ -55,13 +55,15 @@ export interface SearchFilters {
 
 export interface SearchResult {
   id: string;
-  thumbnail_url: string;
+  thumbnail_url: string | null;
   camera_id: string;
   camera_name?: string;
   timestamp: string;
   clothing_class: ClothingClass;
   color: ClothingColor;
   confidence: number;
+  video_id?: string;
+  video_time_offset?: number;
 }
 
 export interface SearchResultsResponse {
