@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useInvestigation } from "./InvestigationContext";
 import type { SearchResult } from "@/types";
@@ -9,6 +9,14 @@ export default function ImageModal() {
   const { state, closeImage, openTrace, setDetectionDetail } = useInvestigation();
   const { imageTarget, detectionDetail } = state;
   const overlayRef = useRef<HTMLDivElement>(null);
+  const [showVideo, setShowVideo] = useState(false);
+
+  // Auto-show video if detectionDetail has video_id
+  useEffect(() => {
+    if (detectionDetail?.video_id) {
+      setShowVideo(true);
+    }
+  }, [detectionDetail]);
 
   // Keyboard close
   useEffect(() => {
@@ -40,16 +48,23 @@ export default function ImageModal() {
     const timeOffset = detectionDetail?.video_time_offset;
 
     if (videoId) {
-      const params = new URLSearchParams({
-        video: videoId,
-        time: timeOffset?.toString() || "0",
-        timestamp: detectionDetail?.timestamp || imageTarget.timestamp,
-        camera_id: detectionDetail?.camera_id || imageTarget.camera_id,
-        clothing_class: detectionDetail?.class_name || imageTarget.clothing_class,
-        color: detectionDetail?.category || imageTarget.color,
-        confidence: (detectionDetail?.confidence || imageTarget.confidence)?.toString() || "0"
-      });
-      window.open(`/search?${params.toString()}`, '_blank');
+      if (showVideo) {
+        // If video is already showing, open in search page
+        const params = new URLSearchParams({
+          video: videoId,
+          time: timeOffset?.toString() || "0",
+          timestamp: detectionDetail?.timestamp || imageTarget.timestamp,
+          camera_id: detectionDetail?.camera_id || imageTarget.camera_id,
+          clothing_class: detectionDetail?.class_name || imageTarget.clothing_class,
+          color: detectionDetail?.category || imageTarget.color,
+          confidence: (detectionDetail?.confidence || imageTarget.confidence)?.toString() || "0",
+          play: "true" // Add play parameter
+        });
+        window.open(`/search?${params.toString()}`, '_blank');
+      } else {
+        // Show video in modal
+        setShowVideo(true);
+      }
     } else {
       alert('No video available for this detection');
     }
@@ -62,9 +77,9 @@ export default function ImageModal() {
       onClick={handleOverlayClick}
       style={{ animation: "fade-in 0.2s ease-out" }}
     >
-      {/* ขยายความกว้าง Modal เป็น max-w-5xl เพื่อรองรับ Layout แบบแบ่งซ้าย-ขวา */}
+      {/* ขยายความกว้าง Modal เป็น max-w-7xl เพื่อรองรับ Layout แบบมี video */}
       <div
-        className="relative w-full max-w-5xl max-h-[90vh] hud-panel flex flex-col overflow-hidden bg-slate-900/90"
+        className="relative w-full max-w-7xl max-h-[90vh] hud-panel flex flex-col overflow-hidden bg-slate-900/90"
         style={{ animation: "slide-in-up 0.3s ease-out" }}
       >
         {/* Top accent line */}
@@ -92,11 +107,11 @@ export default function ImageModal() {
           </button>
         </div>
 
-        {/* ── Body (แบ่งซ้าย-ขวา) ── */}
-        <div className="flex flex-col md:flex-row flex-1 overflow-hidden min-h-0">
+        {/* ── Body (แบ่งซ้าย-กลาง-ขวา) ── */}
+        <div className="flex flex-col lg:flex-row flex-1 overflow-hidden min-h-0">
           
           {/* ซ้าย: พื้นที่แสดงรูปภาพ */}
-          <div className="relative flex-1 min-h-[400px] md:min-h-[500px]">
+          <div className={`relative flex-1 min-h-[400px] md:min-h-[500px] transition-all duration-300 ${showVideo ? 'lg:w-1/2' : ''}`}>
             {(detectionDetail?.image_url || imageTarget.thumbnail_url) && (detectionDetail?.image_url || imageTarget.thumbnail_url)?.trim() !== "" ? (
               <Image
                 src={detectionDetail?.image_url || imageTarget.thumbnail_url}
@@ -121,8 +136,33 @@ export default function ImageModal() {
               style={{ background: "repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.08) 3px,rgba(0,0,0,0.08) 4px)" }} />
           </div>
 
+          {/* กลาง: Video Player (แสดงเมื่อกดปุ่ม VIDEO) */}
+          {showVideo && (
+            <div className="relative lg:w-1/2 min-h-[400px] md:min-h-[500px] bg-black">
+              <video
+                controls
+                className="w-full h-full object-contain"
+                src={`/api/video/videos/${detectionDetail?.video_id}/stream`}
+                ref={(videoElement) => {
+                  if (videoElement && detectionDetail?.video_time_offset) {
+                    // Seek to time offset when video loads
+                    videoElement.addEventListener('loadedmetadata', () => {
+                      videoElement.currentTime = parseFloat(detectionDetail.video_time_offset.toString());
+                    });
+                  }
+                }}
+              >
+                Your browser does not support the video tag.
+              </video>
+              {/* Video frame */}
+              <div className="absolute inset-0 pointer-events-none border border-purple-500/20" />
+              <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-purple-400/60" />
+              <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-purple-400/60" />
+            </div>
+          )}
+
           {/* ขวา: แถบรายละเอียดและปุ่ม */}
-          <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-800/60 bg-slate-950/50 flex flex-col flex-shrink-0 overflow-y-auto">
+          <div className={`w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-800/60 bg-slate-950/50 flex flex-col flex-shrink-0 overflow-y-auto transition-all duration-300 ${showVideo ? 'lg:w-80' : ''}`}>
             {/* ข้อมูลรายละเอียด */}
             <div className="p-6 flex-1 flex flex-col gap-6">
               <div>
@@ -174,7 +214,7 @@ export default function ImageModal() {
                 className="w-full py-3 bg-purple-950/60 border border-purple-700/60 rounded-sm
                   font-mono text-sm font-bold tracking-widest text-purple-400 hover:bg-purple-900/60 transition-colors"
               >
-                VIDEO
+                {showVideo ? 'OPEN IN SEARCH' : 'VIDEO'}
               </button>
             </div>
           </div>
