@@ -277,14 +277,10 @@ async def stream_video_file(video_id: str):
             
             # Check if file exists
             if not os.path.exists(resolved_path):
+                error_msg = f"Video file not found. Path: {file_path}, Resolved: {resolved_path}, Tried: {candidates}"
                 raise HTTPException(
                     status_code=404,
-                    detail={
-                        "message": "Video file not found",
-                        "file_path": file_path,
-                        "resolved_path": resolved_path,
-                        "tried": candidates,
-                    },
+                    detail=error_msg
                 )
             
             # Return video file for streaming

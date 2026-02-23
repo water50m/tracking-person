@@ -21,6 +21,9 @@ export default function ImageModal() {
       setTargetOffset(Number(detectionDetail.video_time_offset));
       setShowVideo(true);
     }
+    // Debug: แสดงค่า detectionDetail ที่ได้รับ
+    console.log('DetectionDetail:', detectionDetail);
+    console.log('Video ID:', detectionDetail?.video_id);
   }, [detectionDetail]);
 
   // Keyboard close
@@ -171,13 +174,13 @@ export default function ImageModal() {
               style={{ background: "repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.08) 3px,rgba(0,0,0,0.08) 4px)" }} />
           </div>
 
-          {showVideo && (
+          {showVideo && detectionDetail?.video_id && (
             <div className="relative lg:w-1/2 min-h-[400px] md:min-h-[500px] bg-black">
               <video
                 ref={videoRef}
                 controls
                 className="w-full h-full object-contain"
-                src={`/api/video/videos/${detectionDetail?.video_id}/stream`}
+                src={`/api/video/videos/${detectionDetail.video_id}/stream`}
                 onLoadedMetadata={() => {
                   // ตอนโหลดวิดีโอครั้งแรก ให้กระโดดไปที่ Original Offset เลย
                   if (videoRef.current && detectionDetail?.video_time_offset !== undefined) {
@@ -190,6 +193,15 @@ export default function ImageModal() {
               <div className="absolute inset-0 pointer-events-none border border-purple-500/20" />
               <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-purple-400/60" />
               <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-purple-400/60" />
+            </div>
+          )}
+
+          {showVideo && !detectionDetail?.video_id && (
+            <div className="relative lg:w-1/2 min-h-[400px] md:min-h-[500px] bg-black flex items-center justify-center">
+              <div className="text-center text-slate-400">
+                <p className="text-lg font-mono">NO VIDEO AVAILABLE</p>
+                <p className="text-sm mt-2">This detection has no associated video</p>
+              </div>
             </div>
           )}
 

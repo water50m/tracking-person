@@ -5,6 +5,7 @@ from src.api.controllers import DetectionController
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.video_controller import router as video_router
 from src.api.routes.realtime import router as realtime_router
+from src.api.routes.camera_relationships import router as camera_relationships_router
 
 controller = DetectionController()
 app = FastAPI(title="CCTV AI Analytics System")
@@ -22,6 +23,9 @@ app.include_router(video_router, prefix="/api/video", tags=["Video Input"])
 
 # 2. ลงทะเบียน Router สำหรับ Real-time Events
 app.include_router(realtime_router, tags=["Real-time Events"])
+
+# 3. ลงทะเบียน Router สำหรับ Camera Relationships
+app.include_router(camera_relationships_router, prefix="/api", tags=["Camera Relationships"])
 
 # 2. ลงทะเบียน Router เดิม (Search, Stats, etc.)
 # (สมมติว่าคุณแยก route ของ detection ไว้ในไฟล์อื่นก็ include มาแบบเดียวกัน)
