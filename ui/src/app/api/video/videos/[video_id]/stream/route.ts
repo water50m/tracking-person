@@ -2,10 +2,10 @@ import { NextRequest } from "next/server";
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { video_id: string } }
+  { params }: { params: Promise<{ video_id: string }> }
 ) {
+  const { video_id } = await params;
   const backendUrl = process.env.AI_BACKEND_URL ?? "http://localhost:8000";
-  const { video_id } = params;
 
   const upstream = await fetch(`${backendUrl}/api/video/videos/${video_id}/stream`, {
     headers: {

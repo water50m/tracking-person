@@ -49,6 +49,7 @@ interface CameraRelationship {
 export default function SearchPage() {
   const [detections, setDetections] = useState<Detection[]>([]);
   const [videos, setVideos] = useState<VideoInfo[]>([]);
+  const [cameras, setCameras] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCamera, setSelectedCamera] = useState("");
   const [selectedVideo, setSelectedVideo] = useState("");
@@ -71,6 +72,17 @@ export default function SearchPage() {
     const clothing_class = urlParams.get('clothing_class');
     const color = urlParams.get('color');
     const confidence = urlParams.get('confidence');
+    const tab = urlParams.get('tab');
+    
+    // ถ้ามี camera_id ให้ตั้งค่า selectedCamera
+    if (camera_id) {
+      setSelectedCamera(camera_id);
+    }
+    
+    // ถ้ามี tab=videos ให้เปลี่ยนไปที่ videos tab
+    if (tab === 'videos') {
+      setActiveTab("videos");
+    }
     
     if (videoId) {
       setSelectedVideo(videoId);
@@ -109,7 +121,7 @@ export default function SearchPage() {
 
     const fetchDetectionDetail = async () => {
       try {
-        const response = await fetch(`/api/detections/${encodeURIComponent(imageTarget.id)}`);
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/detections/${encodeURIComponent(imageTarget.id)}`);
         if (!response.ok) {
           throw new Error("Failed to fetch detection details");
         }
@@ -145,6 +157,20 @@ export default function SearchPage() {
     }
   };
 
+  // ดึงข้อมูลกล้อง
+  const fetchCameras = async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/cameras`);
+      const data = await response.json();
+      
+      // Ensure data is an array
+      setCameras(Array.isArray(data.cameras) ? data.cameras : []);
+    } catch (error) {
+      console.error("Error fetching cameras:", error);
+      setCameras([]);
+    }
+  };
+
   // ดึงข้อมูลวิดีโอ
   const fetchVideos = async () => {
     try {
@@ -167,7 +193,7 @@ export default function SearchPage() {
     }
     
     try {
-      const response = await fetch(`/api/cameras/${encodeURIComponent(cameraId)}/relationships`);
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/cameras/${encodeURIComponent(cameraId)}/relationships`);
       const data = await response.json();
       setCameraRelationships(data.relationships || []);
     } catch (error) {
@@ -178,6 +204,7 @@ export default function SearchPage() {
 
   
   useEffect(() => {
+    fetchCameras();
     fetchDetections();
     fetchVideos();
   }, [selectedCamera, selectedVideo]);
@@ -231,8 +258,8 @@ export default function SearchPage() {
           className="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-sm text-slate-300"
         >
           <option value="">All Cameras</option>
-          {Array.isArray(videos) && Array.from(new Set(videos.map(v => v.camera_id))).map(camera => (
-            <option key={camera} value={camera}>{camera}</option>
+          {Array.isArray(cameras) && cameras.map(camera => (
+            <option key={camera.id} value={camera.name}>{camera.name}</option>
           ))}
         </select>
 

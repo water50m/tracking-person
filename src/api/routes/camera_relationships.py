@@ -13,21 +13,41 @@ async def get_camera_relationships(camera_id: str):
         db = DatabaseService()
         
         # Query for both from_camera_id and to_camera_id relationships
-        query = """
-            SELECT 
-                from_camera_id,
-                to_camera_id,
-                avg_transition_time,
-                CASE 
-                    WHEN from_camera_id = %s THEN 'outgoing'
-                    ELSE 'incoming'
-                END as relationship_type
-            FROM camera_relationships 
-            WHERE from_camera_id = %s OR to_camera_id = %s
-        """
+        # Handle both string and integer camera IDs - try to parse as integer first
+        try:
+            camera_id_int = int(camera_id)
+            # Try integer comparison first
+            query = """
+                SELECT 
+                    from_camera_id,
+                    to_camera_id,
+                    avg_transition_time,
+                    CASE 
+                        WHEN from_camera_id = %s THEN 'outgoing'
+                        ELSE 'incoming'
+                    END as relationship_type
+                FROM camera_relationships 
+                WHERE from_camera_id = %s OR to_camera_id = %s
+            """
+            params = (camera_id_int, camera_id_int, camera_id_int)
+        except ValueError:
+            # If not integer, use string comparison
+            query = """
+                SELECT 
+                    from_camera_id,
+                    to_camera_id,
+                    avg_transition_time,
+                    CASE 
+                        WHEN from_camera_id::text = %s THEN 'outgoing'
+                        ELSE 'incoming'
+                    END as relationship_type
+                FROM camera_relationships 
+                WHERE from_camera_id::text = %s OR to_camera_id::text = %s
+            """
+            params = (camera_id, camera_id, camera_id)
         
         with db.conn.cursor() as cur:
-            cur.execute(query, (camera_id, camera_id, camera_id))
+            cur.execute(query, params)
             rows = cur.fetchall()
             
             relationships = []
@@ -38,10 +58,10 @@ async def get_camera_relationships(camera_id: str):
                 related_camera = to_camera if rel_type == 'outgoing' else from_camera
                 
                 relationships.append({
-                    "camera_id": related_camera,
+                    "camera_id": str(related_camera),
                     "relationship_type": rel_type,
                     "avg_transition_time": avg_time,
-                    "description": f"{'From' if rel_type == 'outgoing'} camera {camera_id} {'to' if rel_type == 'outgoing'} camera {related_camera}"
+                    "description": f"{'From' if rel_type == 'outgoing' else 'To'} camera {camera_id} {'to' if rel_type == 'outgoing' else 'from'} camera {related_camera}"
                 })
             
             return {
