@@ -47,7 +47,7 @@ class DatabaseService:
                         track_id INT,
                         person_id UUID,
                         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        image_url TEXT,
+                        image_path TEXT,
                         category VARCHAR(50),
                         clothing_category VARCHAR(50),
                         class_name VARCHAR(100),
@@ -71,6 +71,25 @@ class DatabaseService:
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_time_offset DOUBLE PRECISION;")
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_id TEXT;")
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS person_id UUID;")
+
+                # Rename image_url -> image_path ถ้ายังใช้ชื่อเก่าอยู่
+                try:
+                    cur.execute("""
+                        DO $$ BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name='detections' AND column_name='image_url'
+                            ) AND NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name='detections' AND column_name='image_path'
+                            ) THEN
+                                ALTER TABLE detections RENAME COLUMN image_url TO image_path;
+                            END IF;
+                        END $$;
+                    """)
+                except Exception:
+                    pass
+                cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS image_path TEXT;")
 
                 # ถ้าเคยสร้าง video_id เป็นชนิดอื่นไว้แล้ว (เช่น UUID) ให้แปลงเป็น TEXT เพื่อให้รองรับทั้ง id แบบเลข/uuid
                 try:
@@ -141,7 +160,7 @@ class DatabaseService:
                 clothing_category,
                 class_name,
                 color_profile,
-                image_url,
+                image_path,
                 video_time_offset,
                 video_id
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -163,6 +182,48 @@ class DatabaseService:
         except Exception as e:
             self.conn.rollback()
             print(f"❌ Database Insert Error: {e}")
+
+    def insert_detections_batch(self, rows: list[dict]):
+        """
+        Batch insert หลาย detection ด้วย SQL statement เดียว
+        เร็วกว่า insert_detection() แบบ loop ~10-20x
+
+        Args:
+            rows: list ของ dict ที่มี keys เดียวกับ insert_detection()
+        """
+        if not rows:
+            return
+
+        from psycopg2.extras import execute_values
+
+        values = [
+            (
+                r["camera_id"],
+                r["track_id"],
+                r.get("person_id"),
+                r.get("category"),
+                r["class_name"],
+                Json(r.get("color_profile") or {}),
+                r.get("image_path", ""),
+                r.get("video_time_offset"),
+                r.get("video_id"),
+            )
+            for r in rows
+        ]
+        query = """
+            INSERT INTO detections (
+                camera_id, track_id, person_id, clothing_category,
+                class_name, color_profile, image_path, video_time_offset, video_id
+            ) VALUES %s
+        """
+        try:
+            with self.conn.cursor() as cur:
+                execute_values(cur, query, values, page_size=100)
+                self.conn.commit()
+                print(f"✅ Batch inserted {len(rows)} detections")
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ Batch Insert Error: {e}")
 
     def close(self):
         if self.conn:

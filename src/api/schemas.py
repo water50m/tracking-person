@@ -15,6 +15,7 @@ class DetectionBase(BaseModel):
 
 class DetectionResponse(DetectionBase):
     id: str # Primary Key จาก Database
+    video_id: Optional[str] = None
 
 # --- 2. สำหรับการค้นหา (นี่คือตัวที่ขาดไปครับ) ---
 class SearchCriteria(BaseModel):

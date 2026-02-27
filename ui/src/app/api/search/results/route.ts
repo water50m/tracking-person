@@ -24,15 +24,18 @@ export async function GET(request: NextRequest) {
   const logic = searchParams.get("logic") ?? "OR";
   const threshold = parseFloat(searchParams.get("threshold") ?? "0.7");
   const cameraId = searchParams.get("camera_id");
+  const videoId = searchParams.get("video_id");
   const startTime = searchParams.get("start_time");
   const endTime = searchParams.get("end_time");
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = Math.min(parseInt(searchParams.get("limit") ?? "24"), 100);
 
-  // Validate inputs
-  if (clothing.length === 0 && colors.length === 0) {
+  // Require at least one filter — unless scoped by camera or video
+  const hasClothingOrColor = clothing.filter(Boolean).length > 0 || colors.length > 0;
+  const hasScopeFilter = !!cameraId || !!videoId;
+  if (!hasClothingOrColor && !hasScopeFilter) {
     return NextResponse.json(
-      { error: "At least one clothing type or color is required" },
+      { error: "At least one clothing type, color, camera, or video is required" },
       { status: 400 }
     );
   }
@@ -54,6 +57,7 @@ export async function GET(request: NextRequest) {
     backendParams.set("logic", logic);
     backendParams.set("threshold", threshold.toString());
     if (cameraId) backendParams.set("camera_id", cameraId);
+    if (videoId) backendParams.set("video_id", videoId);
     if (startTime) backendParams.set("start_time", startTime);
     if (endTime) backendParams.set("end_time", endTime);
     backendParams.set("page", page.toString());

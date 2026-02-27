@@ -49,6 +49,7 @@ export interface SearchFilters {
   logic: "OR" | "AND";
   threshold: number;
   camera_id?: string;
+  video_id?: string;
   start_time?: string;
   end_time?: string;
 }

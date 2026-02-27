@@ -96,7 +96,7 @@ export default function ResultsGrid() {
             <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(100px,1fr))] transition-opacity">
               {results.map((result, i) => (
                 <ResultCard
-                  key={result.id}
+                  key={`${result.id}-${i}`}
                   result={result}
                   index={i}
                   onClick={() => openImage(result)}
@@ -155,7 +155,7 @@ function ResultCard({
     // Get video info from result and navigate to search page
     const videoId = result.video_id;
     const timeOffset = result.video_time_offset;
-    
+
     if (videoId) {
       // Navigate to search page with video info
       const params = new URLSearchParams({
@@ -245,7 +245,7 @@ function ResultCard({
         {/* Action buttons */}
         {hovered && (
           <div className="mt-1 flex gap-1">
-            <button 
+            <button
               onClick={(e) => {
                 e.stopPropagation();
                 openTrace(result);
@@ -255,7 +255,7 @@ function ResultCard({
             >
               TRACE
             </button>
-            <button 
+            <button
               onClick={(e) => {
                 e.stopPropagation();
                 openVideoPlayer();

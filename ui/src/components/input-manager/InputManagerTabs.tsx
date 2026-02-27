@@ -80,10 +80,10 @@ export default function InputManagerTabs() {
 
               {/* Labels */}
               <div className="text-left">
-                <div className={`font-orbitron text-[10px] font-bold tracking-[0.15em] ${isActive ? "text-yellow-400" : ""}`}>
+                <div className={`font-orbitron text-xs font-bold tracking-[0.15em] ${isActive ? "text-yellow-400" : ""}`}>
                   {tab.label}
                 </div>
-                <div className="font-mono text-[8px] text-slate-700 tracking-widest">
+                <div className="font-mono text-[10px] text-slate-700 tracking-widest">
                   {tab.sublabel}
                 </div>
               </div>
@@ -107,7 +107,7 @@ export default function InputManagerTabs() {
       {/* ── Tab Content ── */}
       <div className="flex-1 overflow-auto min-h-0 pt-4">
         {activeTab === "upload" && <UploadTab />}
-        {activeTab === "rtsp"   && <RTSPTab />}
+        {activeTab === "rtsp" && <RTSPTab />}
       </div>
     </div>
   );
@@ -131,8 +131,8 @@ function SystemInfoBadge({
   };
   return (
     <div className="text-right">
-      <div className="font-mono text-[7px] text-slate-700 tracking-widest">{label}</div>
-      <div className={`font-mono text-[9px] font-bold ${colors[color]}`}>{value}</div>
+      <div className="font-mono text-[8px] text-slate-700 tracking-widest">{label}</div>
+      <div className={`font-mono text-xs font-bold ${colors[color]}`}>{value}</div>
     </div>
   );
 }

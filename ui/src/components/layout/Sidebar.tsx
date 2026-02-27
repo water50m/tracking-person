@@ -40,6 +40,32 @@ const NAV_ITEMS = [
     sublabel: "VIDEO & STREAMS",
     accent: "yellow",
   },
+  {
+    href: "/search",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
+        <circle cx="11" cy="11" r="8" />
+        <path d="m21 21-4.35-4.35" />
+        <path d="M11 7v4M9 9h4" />
+      </svg>
+    ),
+    label: "SEARCH",
+    sublabel: "QUERY & FILTER",
+    accent: "green",
+  },
+  {
+    href: "/camera-management",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
+        <path d="M15 10l4.553-2.277A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+        <circle cx="8" cy="12" r="1.5" />
+        <path d="M19 3l2 2-9 9-3 1 1-3 9-9z" opacity="0.4" />
+      </svg>
+    ),
+    label: "CAM MGR",
+    sublabel: "CAMERA MANAGER",
+    accent: "violet",
+  },
 ];
 
 const accentClasses: Record<string, { border: string; text: string; bg: string; glow: string }> = {
@@ -61,7 +87,20 @@ const accentClasses: Record<string, { border: string; text: string; bg: string; 
     bg: "bg-yellow-500/10",
     glow: "shadow-[0_0_10px_rgba(255,190,0,0.3)]",
   },
+  green: {
+    border: "border-green-500",
+    text: "text-green-400",
+    bg: "bg-green-500/10",
+    glow: "shadow-[0_0_10px_rgba(0,220,100,0.3)]",
+  },
+  violet: {
+    border: "border-violet-500",
+    text: "text-violet-400",
+    bg: "bg-violet-500/10",
+    glow: "shadow-[0_0_10px_rgba(139,92,246,0.3)]",
+  },
 };
+
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -141,9 +180,8 @@ export default function Sidebar() {
               {!collapsed && (
                 <div className="min-w-0">
                   <div
-                    className={`font-orbitron text-[10px] font-bold tracking-[0.15em] truncate ${
-                      isActive ? accent.text : "text-slate-500 group-hover:text-slate-300"
-                    } transition-colors`}
+                    className={`font-orbitron text-[10px] font-bold tracking-[0.15em] truncate ${isActive ? accent.text : "text-slate-500 group-hover:text-slate-300"
+                      } transition-colors`}
                   >
                     {item.label}
                   </div>
@@ -204,9 +242,8 @@ function StatusRow({ label, status }: { label: string; status: "online" | "warn"
       <div className="flex items-center gap-1">
         <div className={`w-1.5 h-1.5 rounded-full ${colors[status]} animate-pulse`} />
         <span
-          className={`font-mono text-[7px] ${
-            status === "online" ? "text-green-600" : status === "warn" ? "text-yellow-600" : "text-red-600"
-          }`}
+          className={`font-mono text-[7px] ${status === "online" ? "text-green-600" : status === "warn" ? "text-yellow-600" : "text-red-600"
+            }`}
         >
           {status.toUpperCase()}
         </span>

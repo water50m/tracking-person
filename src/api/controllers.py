@@ -41,6 +41,7 @@ class DetectionController:
         logic: str,
         threshold: float,
         camera_id: str | None,
+        video_id: str | None,
         start_time: str | None,
         end_time: str | None,
         page: int,
@@ -52,7 +53,11 @@ class DetectionController:
             raise RuntimeError("Database not connected")
         if logic not in ["OR", "AND"]:
             raise ValueError("Logic must be OR or AND")
-        if not clothing and not colors:
+        # Strip accidental empty strings (frontend sends clothing[]="" when none selected)
+        clothing = [c for c in clothing if c]
+        colors = [c for c in colors if c]
+        # Allow search if camera_id or video_id narrows scope, even without clothing/colors
+        if not clothing and not colors and not camera_id and not video_id:
             return {"results": [], "total": 0, "page": page, "has_more": False}
 
         offset = (page - 1) * limit
@@ -65,6 +70,9 @@ class DetectionController:
         if camera_id:
             base_where += " AND camera_id = %s"
             params.append(camera_id)
+        if video_id:
+            base_where += " AND video_id = %s"
+            params.append(video_id)
         if start_time:
             base_where += " AND timestamp >= %s"
             params.append(start_time)

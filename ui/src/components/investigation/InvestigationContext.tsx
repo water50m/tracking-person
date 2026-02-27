@@ -43,6 +43,7 @@ const INITIAL_FILTERS: SearchFilters = {
   logic: "OR",
   threshold: 0.65,
   camera_id: undefined,
+  video_id: undefined,
   start_time: undefined,
   end_time: undefined,
 };
@@ -66,15 +67,16 @@ const INITIAL_STATE: InvestigationState = {
 // ─── Actions ──────────────────────────────────────────────────
 
 type Action =
-  | { type: "SET_CLOTHING";   payload: ClothingClass[] }
+  | { type: "SET_CLOTHING"; payload: ClothingClass[] }
   | { type: "TOGGLE_CLOTHING"; payload: ClothingClass }
-  | { type: "SET_COLORS";     payload: ClothingColor[] }
-  | { type: "TOGGLE_COLOR";   payload: ClothingColor }
-  | { type: "SET_LOGIC";      payload: "OR" | "AND" }
-  | { type: "SET_THRESHOLD";  payload: number }
-  | { type: "SET_CAMERA";     payload: string | undefined }
+  | { type: "SET_COLORS"; payload: ClothingColor[] }
+  | { type: "TOGGLE_COLOR"; payload: ClothingColor }
+  | { type: "SET_LOGIC"; payload: "OR" | "AND" }
+  | { type: "SET_THRESHOLD"; payload: number }
+  | { type: "SET_CAMERA"; payload: string | undefined }
+  | { type: "SET_VIDEO"; payload: string | undefined }
   | { type: "SET_START_TIME"; payload: string | undefined }
-  | { type: "SET_END_TIME";   payload: string | undefined }
+  | { type: "SET_END_TIME"; payload: string | undefined }
   | { type: "RESET_FILTERS" }
   | { type: "SEARCH_START" }
   | { type: "SEARCH_SUCCESS"; payload: { results: SearchResult[]; total: number; hasMore: boolean } }
@@ -86,9 +88,9 @@ type Action =
   | { type: "AUTOFILL_SUCCESS"; payload: AttributeDetectionResult }
   | { type: "AUTOFILL_ERROR" }
   | { type: "CLEAR_AUTOFILL" }
-  | { type: "OPEN_TRACE";  payload: SearchResult }
+  | { type: "OPEN_TRACE"; payload: SearchResult }
   | { type: "CLOSE_TRACE" }
-  | { type: "OPEN_IMAGE";  payload: SearchResult }
+  | { type: "OPEN_IMAGE"; payload: SearchResult }
   | { type: "CLOSE_IMAGE" }
   | { type: "SET_DETECTION_DETAIL"; payload: any | null };
 
@@ -127,7 +129,9 @@ function reducer(state: InvestigationState, action: Action): InvestigationState 
     case "SET_THRESHOLD":
       return { ...state, filters: { ...state.filters, threshold: action.payload } };
     case "SET_CAMERA":
-      return { ...state, filters: { ...state.filters, camera_id: action.payload } };
+      return { ...state, filters: { ...state.filters, camera_id: action.payload, video_id: undefined } };
+    case "SET_VIDEO":
+      return { ...state, filters: { ...state.filters, video_id: action.payload } };
     case "SET_START_TIME":
       return { ...state, filters: { ...state.filters, start_time: action.payload } };
     case "SET_END_TIME":
@@ -193,6 +197,7 @@ interface InvestigationContextValue {
   setLogic: (l: "OR" | "AND") => void;
   setThreshold: (t: number) => void;
   setCamera: (id: string | undefined) => void;
+  setVideo: (id: string | undefined) => void;
   setTimeRange: (start?: string, end?: string) => void;
   resetFilters: () => void;
   runSearch: () => void;
@@ -226,7 +231,7 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
     const timer = setTimeout(() => {
       runSearch();
     }, 500); // Small delay to ensure component is mounted
-    
+
     return () => clearTimeout(timer);
   }, []);
 
@@ -372,14 +377,10 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
     p.set("page", page.toString());
     p.set("limit", "24");
     if (filters.camera_id) p.set("camera_id", filters.camera_id);
+    if (filters.video_id) p.set("video_id", filters.video_id);
     if (filters.start_time) p.set("start_time", filters.start_time);
-    if (filters.end_time)   p.set("end_time", filters.end_time);
-    
-    // Always include clothing[] parameter even if empty
-    if (filters.clothing.length === 0) {
-      p.append("clothing[]", "");
-    }
-    
+    if (filters.end_time) p.set("end_time", filters.end_time);
+
     return p.toString();
   }
 
@@ -396,13 +397,14 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
     state,
     dispatch,
     toggleClothing: (c) => dispatch({ type: "TOGGLE_CLOTHING", payload: c }),
-    toggleColor:    (c) => dispatch({ type: "TOGGLE_COLOR",    payload: c }),
-    setLogic:       (l) => dispatch({ type: "SET_LOGIC",       payload: l }),
-    setThreshold:   (t) => dispatch({ type: "SET_THRESHOLD",   payload: t }),
-    setCamera:      (id) => dispatch({ type: "SET_CAMERA",     payload: id }),
-    setTimeRange:   (s, e) => {
+    toggleColor: (c) => dispatch({ type: "TOGGLE_COLOR", payload: c }),
+    setLogic: (l) => dispatch({ type: "SET_LOGIC", payload: l }),
+    setThreshold: (t) => dispatch({ type: "SET_THRESHOLD", payload: t }),
+    setCamera: (id) => dispatch({ type: "SET_CAMERA", payload: id }),
+    setVideo: (id) => dispatch({ type: "SET_VIDEO", payload: id }),
+    setTimeRange: (s, e) => {
       dispatch({ type: "SET_START_TIME", payload: s });
-      dispatch({ type: "SET_END_TIME",   payload: e });
+      dispatch({ type: "SET_END_TIME", payload: e });
     },
     resetFilters: () => dispatch({ type: "RESET_FILTERS" }),
     runSearch,

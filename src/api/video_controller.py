@@ -35,7 +35,8 @@ async def upload_video(
     # ชื่อเรียกของกล้องแบบที่มนุษย์เข้าใจง่าย (Display Name) เช่น "หน้าประตู", "ลานจอดรถ"
     # Optional[str] หมายถึง "จะส่งมาหรือไม่ส่งก็ได้" (ไม่ได้บังคับ)
     # Form(None) คือค่าตั้งต้นจะเป็น None ถ้าหน้าบ้านไม่ได้ส่งค่านี้มา
-    label: Optional[str] = Form(None)
+    label: Optional[str] = Form(None),
+    frame_skip: int = Form(30, description="Process every N-th frame (default: 30)")
 ):
     try:
         
@@ -55,7 +56,7 @@ async def upload_video(
         )
         
         # 2. ส่งงานให้ ai_processor ทำต่อใน Background (โยนงานแล้วจบเลย)
-        background_tasks.add_task(process_video_task, source=file_path, camera_id=camera_id, video_id=str(video_id) if video_id else None)
+        background_tasks.add_task(process_video_task, source=file_path, camera_id=camera_id, video_id=str(video_id) if video_id else None, frame_skip=frame_skip)
         
         return {
             "status": "processing_started",
@@ -71,10 +72,10 @@ async def upload_video(
 async def stream_video(
     background_tasks: BackgroundTasks,
     camera_id: str = Form(...),
-    stream_url: str = Form(...) # RTSP Link หรือ "0" สำหรับ Webcam
+    stream_url: str = Form(...),
+    frame_skip: int = Form(30, description="Process every N-th frame (default: 30)")
 ):
-    # สำหรับ Stream ไม่ต้องโหลดไฟล์ ส่ง URL ไปให้ process เลย
-    background_tasks.add_task(process_video_task, source=stream_url, camera_id=camera_id, video_id=None)
+    background_tasks.add_task(process_video_task, source=stream_url, camera_id=camera_id, video_id=None, frame_skip=frame_skip)
     
     return {
         "status": "stream_connected",
@@ -162,10 +163,9 @@ async def get_detections(
     try:
         db = DatabaseService()
         
-        # Build query
         query = """
             SELECT id, track_id, timestamp, image_path, clothing_category, 
-                   class_name, color_profile, camera_id 
+                   class_name, color_profile, camera_id, video_id::text
             FROM detections 
             WHERE 1=1
         """
@@ -198,7 +198,8 @@ async def get_detections(
                     category=str(row[4]) if row[4] else "UNKNOWN",
                     class_name=str(row[5]) if row[5] else "unknown",
                     color_profile=row[6] if row[6] else {},
-                    camera_id=str(row[7]) if row[7] else "N/A"
+                    camera_id=str(row[7]) if row[7] else "N/A",
+                    video_id=str(row[8]) if row[8] else None,
                 ))
                 # Log the generated URL for debugging
             
@@ -208,9 +209,11 @@ async def get_detections(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/videos")
-async def get_videos():
+async def get_videos(
+    camera_id: Optional[str] = Query(None, description="Filter by camera ID")
+):
     """
-    ดึงข้อมูลวิดีโอทั้งหมด
+    ดึงข้อมูลวิดีโอทั้งหมด (กรองตาม camera_id ได้)
     """
     try:
         db = DatabaseService()
@@ -218,11 +221,18 @@ async def get_videos():
         query = """
             SELECT id, camera_id, label, filename, file_path, status, created_at 
             FROM processed_videos 
-            ORDER BY created_at DESC
+            WHERE 1=1
         """
+        params = []
+        
+        if camera_id:
+            query += " AND camera_id = %s"
+            params.append(camera_id)
+        
+        query += " ORDER BY created_at DESC"
         
         with db.conn.cursor() as cur:
-            cur.execute(query)
+            cur.execute(query, tuple(params))
             rows = cur.fetchall()
             
             results = []

@@ -6,23 +6,23 @@ import type { RTSPStream, RTSPTestResult } from "@/types";
 // ─── Mock seed streams ────────────────────────────────────────
 
 const SEED_STREAMS: RTSPStream[] = [
-  { camera_id: "CAM-01", rtsp_url: "rtsp://192.168.1.101:554/live",  label: "Main Entrance", status: "live",    resolution: "1920x1080", fps: 25 },
-  { camera_id: "CAM-02", rtsp_url: "rtsp://192.168.1.102:554/ch0",   label: "Corridor B",    status: "live",    resolution: "1280x720",  fps: 30 },
-  { camera_id: "CAM-03", rtsp_url: "rtsp://192.168.1.103:554/main",  label: "Parking Lot",   status: "offline", resolution: undefined,    fps: undefined },
-  { camera_id: "CAM-04", rtsp_url: "rtsp://192.168.1.104:554/stream",label: "Exit Gate",     status: "error",   resolution: undefined,    fps: undefined },
+  { camera_id: "CAM-01", rtsp_url: "rtsp://192.168.1.101:554/live", label: "Main Entrance", status: "live", resolution: "1920x1080", fps: 25 },
+  { camera_id: "CAM-02", rtsp_url: "rtsp://192.168.1.102:554/ch0", label: "Corridor B", status: "live", resolution: "1280x720", fps: 30 },
+  { camera_id: "CAM-03", rtsp_url: "rtsp://192.168.1.103:554/main", label: "Parking Lot", status: "offline", resolution: undefined, fps: undefined },
+  { camera_id: "CAM-04", rtsp_url: "rtsp://192.168.1.104:554/stream", label: "Exit Gate", status: "error", resolution: undefined, fps: undefined },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────
 
 const STATUS_STYLE: Record<RTSPStream["status"], { text: string; border: string; bg: string; dot: string }> = {
-  live:    { text: "text-green-400",  border: "border-green-800/60",  bg: "bg-green-950/30",   dot: "bg-green-500 animate-pulse" },
-  offline: { text: "text-slate-500",  border: "border-slate-700/60",  bg: "bg-slate-900/30",   dot: "bg-slate-600" },
-  error:   { text: "text-red-400",    border: "border-red-800/60",    bg: "bg-red-950/20",     dot: "bg-red-500" },
+  live: { text: "text-green-400", border: "border-green-800/60", bg: "bg-green-950/30", dot: "bg-green-500 animate-pulse" },
+  offline: { text: "text-slate-500", border: "border-slate-700/60", bg: "bg-slate-900/30", dot: "bg-slate-600" },
+  error: { text: "text-red-400", border: "border-red-800/60", bg: "bg-red-950/20", dot: "bg-red-500" },
 };
 
 const CAMERA_ACCENTS: Record<string, { text: string; border: string }> = {
-  "CAM-01": { text: "text-cyan-400",   border: "border-cyan-900" },
-  "CAM-02": { text: "text-pink-400",   border: "border-pink-900" },
+  "CAM-01": { text: "text-cyan-400", border: "border-cyan-900" },
+  "CAM-02": { text: "text-pink-400", border: "border-pink-900" },
   "CAM-03": { text: "text-yellow-400", border: "border-yellow-900" },
   "CAM-04": { text: "text-purple-400", border: "border-purple-900" },
 };
@@ -83,7 +83,7 @@ export default function RTSPTab() {
       // Simulate in dev
       await new Promise((r) => setTimeout(r, 1200));
       const mock: RTSPTestResult = Math.random() > 0.3
-        ? { reachable: true,  latency_ms: 40 + Math.floor(Math.random() * 80), resolution: "1920x1080", fps: 25 }
+        ? { reachable: true, latency_ms: 40 + Math.floor(Math.random() * 80), resolution: "1920x1080", fps: 25 }
         : { reachable: false, error: "Connection refused or host unreachable" };
       setTestResult(mock);
     }
@@ -161,7 +161,7 @@ export default function RTSPTab() {
       {/* ── Left: Add form ── */}
       <div className="w-80 flex-shrink-0 flex flex-col gap-3">
         <div className="hud-panel p-4 flex flex-col gap-3">
-          <div className="font-orbitron text-[10px] font-bold text-slate-400 tracking-[0.2em] mb-1">
+          <div className="font-orbitron text-xs font-bold text-slate-400 tracking-[0.2em] mb-1">
             ADD NEW STREAM
           </div>
 
@@ -256,8 +256,8 @@ export default function RTSPTab() {
               ${addStatus === "done"
                 ? "border-green-700/60 bg-green-950/30 text-green-400"
                 : addStatus === "adding"
-                ? "border-yellow-800/60 bg-yellow-950/30 text-yellow-500"
-                : "border-yellow-600/60 bg-yellow-950/30 text-yellow-400 hover:bg-yellow-900/40 hover:border-yellow-500 shadow-[0_0_10px_rgba(255,215,0,0.1)] hover:shadow-[0_0_18px_rgba(255,215,0,0.2)]"
+                  ? "border-yellow-800/60 bg-yellow-950/30 text-yellow-500"
+                  : "border-yellow-600/60 bg-yellow-950/30 text-yellow-400 hover:bg-yellow-900/40 hover:border-yellow-500 shadow-[0_0_10px_rgba(255,215,0,0.1)] hover:shadow-[0_0_18px_rgba(255,215,0,0.2)]"
               }
             `}
           >
@@ -273,18 +273,18 @@ export default function RTSPTab() {
 
         {/* Tips panel */}
         <div className="hud-panel p-3">
-          <div className="font-mono text-[8px] text-slate-600 tracking-[0.2em] mb-2">FORMAT EXAMPLES</div>
+          <div className="font-mono text-[10px] text-slate-600 tracking-[0.2em] mb-2">FORMAT EXAMPLES</div>
           {[
             { label: "Hikvision", url: "rtsp://admin:pass@ip:554/h264/ch1/main/av_stream" },
-            { label: "Dahua",     url: "rtsp://admin:pass@ip:554/cam/realmonitor?channel=1" },
-            { label: "Generic",   url: "rtsp://user:pass@host:554/live" },
+            { label: "Dahua", url: "rtsp://admin:pass@ip:554/cam/realmonitor?channel=1" },
+            { label: "Generic", url: "rtsp://user:pass@host:554/live" },
           ].map(({ label, url }) => (
             <button
               key={label}
               onClick={() => setFormUrl(url)}
               className="w-full text-left mb-1 group"
             >
-              <span className="font-mono text-[8px] text-slate-600 group-hover:text-slate-400 transition-colors">
+              <span className="font-mono text-[9px] text-slate-600 group-hover:text-slate-400 transition-colors">
                 <span className="text-slate-700 mr-1">{label}:</span>
                 {url}
               </span>
@@ -298,12 +298,12 @@ export default function RTSPTab() {
         {/* Table header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800/60 flex-shrink-0">
           <div className="flex items-center gap-3">
-            <span className="font-orbitron text-[10px] font-bold text-slate-400 tracking-[0.2em]">ACTIVE STREAMS</span>
+            <span className="font-orbitron text-xs font-bold text-slate-400 tracking-[0.2em]">ACTIVE STREAMS</span>
             <div className="flex items-center gap-1">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="font-mono text-[9px] text-green-500">{liveCount} LIVE</span>
+              <span className="font-mono text-[10px] text-green-500">{liveCount} LIVE</span>
             </div>
-            <span className="font-mono text-[9px] text-slate-600">/ {streams.length} TOTAL</span>
+            <span className="font-mono text-[10px] text-slate-600">/ {streams.length} TOTAL</span>
           </div>
           <button className="font-mono text-[8px] text-slate-600 hover:text-slate-400 transition-colors">
             REFRESH ALL
@@ -314,7 +314,7 @@ export default function RTSPTab() {
         <div className="grid gap-2 px-4 py-1.5 border-b border-slate-800/30 flex-shrink-0"
           style={{ gridTemplateColumns: "90px 1fr 120px 90px 80px 70px 100px" }}>
           {["CAM ID", "URL / LABEL", "STATUS", "RESOLUTION", "FPS", "LATENCY", "ACTIONS"].map((h) => (
-            <span key={h} className="font-mono text-[7px] text-slate-700 tracking-widest uppercase">{h}</span>
+            <span key={h} className="font-mono text-[9px] text-slate-700 tracking-widest uppercase">{h}</span>
           ))}
         </div>
 
@@ -350,7 +350,7 @@ export default function RTSPTab() {
               return (
                 <div key={s} className="flex items-center gap-1.5">
                   <div className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
-                  <span className={`font-mono text-[8px] ${st.text}`}>{count} {s.toUpperCase()}</span>
+                  <span className={`font-mono text-[10px] ${st.text}`}>{count} {s.toUpperCase()}</span>
                 </div>
               );
             })}
@@ -401,27 +401,27 @@ function StreamRow({
       onClick={onSelect}
     >
       {/* Cam ID */}
-      <span className={`font-mono text-[10px] font-bold ${accent.text} border ${accent.border} px-1.5 py-0.5 rounded-sm inline-block w-fit`}>
+      <span className={`font-mono text-xs font-bold ${accent.text} border ${accent.border} px-1.5 py-0.5 rounded-sm inline-block w-fit`}>
         {stream.camera_id}
       </span>
 
       {/* URL / Label */}
       <div className="min-w-0">
-        <div className="font-mono text-[9px] text-slate-300 truncate">{stream.label ?? stream.camera_id}</div>
-        <div className="font-mono text-[8px] text-slate-600 truncate">{stream.rtsp_url}</div>
+        <div className="font-mono text-xs text-slate-300 truncate">{stream.label ?? stream.camera_id}</div>
+        <div className="font-mono text-[10px] text-slate-600 truncate">{stream.rtsp_url}</div>
       </div>
 
       {/* Status */}
       <div className="flex items-center gap-1.5">
         <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${style.dot}`} />
-        <span className={`font-mono text-[9px] ${style.text}`}>{stream.status.toUpperCase()}</span>
+        <span className={`font-mono text-[10px] ${style.text}`}>{stream.status.toUpperCase()}</span>
       </div>
 
       {/* Resolution */}
-      <span className="font-mono text-[9px] text-slate-400">{stream.resolution ?? "—"}</span>
+      <span className="font-mono text-[10px] text-slate-400">{stream.resolution ?? "—"}</span>
 
       {/* FPS */}
-      <span className="font-mono text-[9px] text-slate-400 tabular-nums">
+      <span className="font-mono text-[10px] text-slate-400 tabular-nums">
         {stream.fps != null ? <><span className="text-cyan-400">{stream.fps}</span> fps</> : "—"}
       </span>
 
@@ -436,11 +436,10 @@ function StreamRow({
         <button
           onClick={onToggle}
           title={stream.status === "live" ? "Pause stream" : "Resume stream"}
-          className={`p-1 rounded-sm border transition-colors ${
-            stream.status === "live"
-              ? "border-slate-700 text-slate-500 hover:border-yellow-700 hover:text-yellow-400"
-              : "border-slate-700 text-slate-600 hover:border-green-700 hover:text-green-400"
-          }`}
+          className={`p-1 rounded-sm border transition-colors ${stream.status === "live"
+            ? "border-slate-700 text-slate-500 hover:border-yellow-700 hover:text-yellow-400"
+            : "border-slate-700 text-slate-600 hover:border-green-700 hover:text-green-400"
+            }`}
         >
           {stream.status === "live" ? (
             <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
@@ -453,11 +452,10 @@ function StreamRow({
         <button
           onClick={handleRemoveClick}
           title={confirmRemove ? "Click again to confirm" : "Remove stream"}
-          className={`p-1 rounded-sm border transition-all ${
-            confirmRemove
-              ? "border-red-600/60 text-red-400 bg-red-950/30 animate-pulse"
-              : "border-slate-700 text-slate-600 hover:border-red-700/60 hover:text-red-400"
-          }`}
+          className={`p-1 rounded-sm border transition-all ${confirmRemove
+            ? "border-red-600/60 text-red-400 bg-red-950/30 animate-pulse"
+            : "border-slate-700 text-slate-600 hover:border-red-700/60 hover:text-red-400"
+            }`}
         >
           {confirmRemove ? (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3 h-3">
@@ -491,13 +489,13 @@ function FormField({
 }) {
   return (
     <div>
-      <label className="font-mono text-[8px] text-slate-500 tracking-[0.2em] uppercase flex items-center gap-1 mb-1">
+      <label className="font-mono text-[10px] text-slate-500 tracking-[0.2em] uppercase flex items-center gap-1 mb-1">
         {label}
         {required && <span className="text-red-500">*</span>}
         {hint && <span className="text-slate-700 normal-case tracking-normal">· {hint}</span>}
       </label>
       {children}
-      {error && <p className="font-mono text-[8px] text-red-400 mt-0.5 tracking-wide">{error}</p>}
+      {error && <p className="font-mono text-[10px] text-red-400 mt-0.5 tracking-wide">{error}</p>}
     </div>
   );
 }

@@ -22,10 +22,10 @@ function statusLabel(s: JobStatus): string {
 }
 
 const STATUS_STYLE: Record<JobStatus, { text: string; border: string; bg: string; barColor: string }> = {
-  queued:     { text: "text-slate-400",  border: "border-slate-700",   bg: "bg-slate-800/40",   barColor: "#64748b" },
-  processing: { text: "text-cyan-400",   border: "border-cyan-800/60", bg: "bg-cyan-950/30",    barColor: "#00f5ff" },
-  done:       { text: "text-green-400",  border: "border-green-800/60",bg: "bg-green-950/30",   barColor: "#39ff14" },
-  error:      { text: "text-red-400",    border: "border-red-800/60",  bg: "bg-red-950/30",     barColor: "#ef4444" },
+  queued: { text: "text-slate-400", border: "border-slate-700", bg: "bg-slate-800/40", barColor: "#64748b" },
+  processing: { text: "text-cyan-400", border: "border-cyan-800/60", bg: "bg-cyan-950/30", barColor: "#00f5ff" },
+  done: { text: "text-green-400", border: "border-green-800/60", bg: "bg-green-950/30", barColor: "#39ff14" },
+  error: { text: "text-red-400", border: "border-red-800/60", bg: "bg-red-950/30", barColor: "#ef4444" },
 };
 
 // ─── Component ────────────────────────────────────────────────
@@ -112,7 +112,7 @@ export default function UploadTab() {
 
         {/* Camera ID input */}
         <div className="hud-panel p-4">
-          <label className="font-mono text-[8px] text-slate-500 tracking-[0.2em] uppercase block mb-2">
+          <label className="font-mono text-[10px] text-slate-500 tracking-[0.2em] uppercase block mb-2">
             CAMERA ID <span className="text-red-500">*</span>
           </label>
           <div className="flex gap-3 items-start">
@@ -141,7 +141,7 @@ export default function UploadTab() {
                 <p className="font-mono text-[9px] text-red-400 mt-1 tracking-wide">{cameraIdError}</p>
               )}
             </div>
-            <div className="font-mono text-[8px] text-slate-600 pt-2 leading-relaxed">
+            <div className="font-mono text-[10px] text-slate-600 pt-2 leading-relaxed">
               <p>Assign this video to a camera.</p>
               <p>All detections will be tagged with this ID.</p>
             </div>
@@ -149,12 +149,12 @@ export default function UploadTab() {
 
           {/* Quick-fill presets */}
           <div className="flex items-center gap-2 mt-2">
-            <span className="font-mono text-[8px] text-slate-700">QUICK:</span>
+            <span className="font-mono text-[10px] text-slate-700">QUICK:</span>
             {["CAM-01", "CAM-02", "CAM-03", "CAM-04"].map((id) => (
               <button
                 key={id}
                 onClick={() => { setCameraId(id); setCameraIdError(null); }}
-                className={`font-mono text-[8px] px-2 py-0.5 rounded-sm border transition-colors
+                className={`font-mono text-[10px] px-2 py-0.5 rounded-sm border transition-colors
                   ${cameraId === id
                     ? "border-yellow-600/60 text-yellow-400 bg-yellow-950/30"
                     : "border-slate-800 text-slate-600 hover:border-slate-700 hover:text-slate-400"
@@ -174,8 +174,8 @@ export default function UploadTab() {
             ${isDragOver
               ? "border-yellow-400/60 bg-yellow-950/20 scale-[1.01]"
               : dragError
-              ? "border-red-600/40 bg-red-950/10"
-              : "border-slate-700/60 hover:border-slate-600/60 hover:bg-slate-900/30"
+                ? "border-red-600/40 bg-red-950/10"
+                : "border-slate-700/60 hover:border-slate-600/60 hover:bg-slate-900/30"
             }
           `}
           onDragOver={handleDragOver}
@@ -212,19 +212,19 @@ export default function UploadTab() {
           {/* Text */}
           {dragError ? (
             <div className="text-center">
-              <p className="font-mono text-[10px] text-red-400 tracking-wider">{dragError}</p>
-              <p className="font-mono text-[9px] text-slate-600 mt-1">Click to try again</p>
+              <p className="font-mono text-xs text-red-400 tracking-wider">{dragError}</p>
+              <p className="font-mono text-[10px] text-slate-600 mt-1">Click to try again</p>
             </div>
           ) : isDragOver ? (
             <div className="text-center">
               <p className="font-orbitron text-sm font-bold text-yellow-400 tracking-[0.2em]">RELEASE TO QUEUE</p>
-              <p className="font-mono text-[9px] text-yellow-600 mt-1">Files will be added to processing queue</p>
+              <p className="font-mono text-[10px] text-yellow-600 mt-1">Files will be added to processing queue</p>
             </div>
           ) : (
             <div className="text-center">
               <p className="font-orbitron text-sm font-bold text-slate-500 tracking-[0.15em]">DRAG & DROP VIDEO FILES</p>
-              <p className="font-mono text-[9px] text-slate-700 mt-1">or click to browse</p>
-              <p className="font-mono text-[8px] text-slate-800 mt-3">MP4 · AVI · MOV · MKV &nbsp;·&nbsp; MAX {MAX_SIZE_GB}GB</p>
+              <p className="font-mono text-[10px] text-slate-700 mt-1">or click to browse</p>
+              <p className="font-mono text-[10px] text-slate-800 mt-3">MP4 · AVI · MOV · MKV &nbsp;·&nbsp; MAX {MAX_SIZE_GB}GB</p>
             </div>
           )}
 
@@ -241,7 +241,7 @@ export default function UploadTab() {
         {/* Queue header */}
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-800/60 flex-shrink-0">
           <div className="flex items-center gap-2">
-            <span className="font-orbitron text-[10px] font-bold text-slate-400 tracking-[0.2em]">PROCESSING QUEUE</span>
+            <span className="font-orbitron text-xs font-bold text-slate-400 tracking-[0.2em]">PROCESSING QUEUE</span>
             {jobs.length > 0 && (
               <span className="w-4 h-4 rounded-full bg-yellow-900/60 border border-yellow-800/60
                 font-mono text-[8px] text-yellow-400 flex items-center justify-center">
@@ -252,7 +252,7 @@ export default function UploadTab() {
           {jobs.length > 0 && (
             <button
               onClick={() => setJobs((j) => j.filter((x) => x.status !== "done"))}
-              className="font-mono text-[8px] text-slate-600 hover:text-slate-400 transition-colors"
+              className="font-mono text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
             >
               CLEAR DONE
             </button>
@@ -267,9 +267,7 @@ export default function UploadTab() {
                 <path d="M9 12h6M9 16h6M7 4H4a2 2 0 00-2 2v14a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2h-3" />
                 <rect x="7" y="2" width="10" height="4" rx="1" />
               </svg>
-              <p className="font-mono text-[9px] text-slate-700 tracking-widest text-center">
-                QUEUE EMPTY<br />Drop files to start
-              </p>
+              <div className="font-mono text-[10px] text-slate-700 tracking-[0.2em] tracking-widest text-center">QUEUE EMPTY<br />Drop files to start</div>
             </div>
           ) : (
             jobs.map((job) => (
@@ -322,16 +320,15 @@ function JobCard({
       {/* Top row */}
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <div className="flex-1 min-w-0">
-          <p className="font-mono text-[10px] text-slate-200 truncate leading-tight">{job.filename}</p>
+          <p className="font-mono text-xs text-slate-200 truncate leading-tight">{job.filename}</p>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="font-mono text-[8px] text-slate-600">{formatBytes(job.size_bytes)}</span>
+            <span className="font-mono text-[10px] text-slate-600">{formatBytes(job.size_bytes)}</span>
             <span className="font-mono text-[7px] text-slate-700">·</span>
-            <span className={`font-mono text-[8px] border px-1 rounded-sm ${
-              job.camera_id === "CAM-01" ? "border-cyan-900 text-cyan-500" :
+            <span className={`font-mono text-[10px] border px-1 rounded-sm ${job.camera_id === "CAM-01" ? "border-cyan-900 text-cyan-500" :
               job.camera_id === "CAM-02" ? "border-pink-900 text-pink-500" :
-              job.camera_id === "CAM-03" ? "border-yellow-900 text-yellow-500" :
-              "border-slate-700 text-slate-500"
-            }`}>
+                job.camera_id === "CAM-03" ? "border-yellow-900 text-yellow-500" :
+                  "border-slate-700 text-slate-500"
+              }`}>
               {job.camera_id}
             </span>
           </div>
@@ -366,7 +363,7 @@ function JobCard({
 
       {/* Status badge + progress */}
       <div className="flex items-center justify-between mb-1.5">
-        <div className={`flex items-center gap-1 font-mono text-[8px] font-bold ${style.text}`}>
+        <div className={`flex items-center gap-1 font-mono text-[10px] font-bold ${style.text}`}>
           {job.status === "processing" && (
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
           )}
@@ -383,7 +380,7 @@ function JobCard({
           {statusLabel(job.status)}
         </div>
         {job.status !== "error" && (
-          <span className={`font-mono text-[8px] tabular-nums ${style.text}`}>
+          <span className={`font-mono text-[10px] tabular-nums ${style.text}`}>
             {Math.round(progress)}%
           </span>
         )}
@@ -405,18 +402,19 @@ function JobCard({
 
       {/* Error message */}
       {job.status === "error" && job.error && (
-        <p className="font-mono text-[8px] text-red-500 mt-1 leading-relaxed">{job.error}</p>
+        <p className="font-mono text-[10px] text-red-500 mt-1 leading-relaxed">{job.error}</p>
       )}
 
       {/* Done: estimated detections */}
       {job.status === "done" && (
-        <p className="font-mono text-[8px] text-green-600 mt-1">
+        <p className="font-mono text-[10px] text-green-600 mt-1">
           ✓ Indexed · {Math.floor(job.size_bytes / 800_000)} detections found
         </p>
       )}
     </div>
   );
 }
+
 
 // ─── Simulate upload + processing ─────────────────────────────
 
