@@ -3,11 +3,12 @@
 import React, { useState } from "react";
 import UploadTab from "./UploadTab";
 import RTSPTab from "./RTSPTab";
+import YouTubeTab from "./YouTubeTab";
 // React is imported for JSX and React.ReactNode type
 
 // ─── Tab definitions ──────────────────────────────────────────
 
-type TabId = "upload" | "rtsp";
+type TabId = "upload" | "rtsp" | "youtube";
 
 interface Tab {
   id: TabId;
@@ -35,6 +36,16 @@ const TABS: Tab[] = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
         <path d="M15 10l4.553-2.277A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
         <circle cx="9" cy="12" r="1.5" fill="currentColor" className="animate-pulse" />
+      </svg>
+    ),
+  },
+  {
+    id: "youtube" as TabId,
+    label: "YOUTUBE",
+    sublabel: "ANALYSE YT VIDEO",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 text-red-500">
+        <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.69a8.18 8.18 0 004.77 1.52V6.75a4.85 4.85 0 01-1-.06z" />
       </svg>
     ),
   },
@@ -108,6 +119,7 @@ export default function InputManagerTabs() {
       <div className="flex-1 overflow-auto min-h-0 pt-4">
         {activeTab === "upload" && <UploadTab />}
         {activeTab === "rtsp" && <RTSPTab />}
+        {activeTab === "youtube" && <YouTubeTab />}
       </div>
     </div>
   );

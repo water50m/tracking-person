@@ -2,10 +2,12 @@ from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPExce
 from fastapi.responses import FileResponse
 import shutil
 import os
+import re
 from typing import Optional, List
 from src.services.ai_processor import process_video_task
 from src.services.database import DatabaseService
 from src.api.schemas import DetectionResponse
+import yt_dlp
 
 router = APIRouter()
 
@@ -81,6 +83,88 @@ async def stream_video(
         "status": "stream_connected",
         "camera_id": camera_id,
         "source": stream_url
+    }
+
+
+YOUTUBE_PATTERN = re.compile(
+    r"(https?://)?(www\.)?(youtube\.com/(watch\?v=|shorts/)|youtu\.be/)[A-Za-z0-9_\-]+"
+)
+
+
+def _extract_youtube_stream(url: str) -> dict:
+    """Use yt-dlp to get the best direct video stream URL (no downloads)."""
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "format": "bestvideo[ext=mp4][height<=720]+bestaudio/best[ext=mp4][height<=720]/best",
+        "noplaylist": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if not info:
+            raise ValueError("Could not extract video info from YouTube URL")
+        # For merged format the url is in 'url', for adaptive it's in 'requested_downloads'
+        stream_url = info.get("url") or (
+            info["requested_downloads"][0]["url"] if info.get("requested_downloads") else None
+        )
+        if not stream_url:
+            # Try first format
+            formats = info.get("formats", [])
+            mp4 = [f for f in formats if f.get("ext") == "mp4" and f.get("url")]
+            if mp4:
+                stream_url = mp4[-1]["url"]  # last = highest quality
+        if not stream_url:
+            raise ValueError("No streamable URL found for this video")
+        return {
+            "stream_url": stream_url,
+            "title": info.get("title", url),
+            "duration": info.get("duration"),
+            "thumbnail": info.get("thumbnail"),
+            "uploader": info.get("uploader"),
+        }
+
+
+@router.post("/analyze/youtube")
+async def analyze_youtube(
+    background_tasks: BackgroundTasks,
+    youtube_url: str = Form(...),
+    camera_id: str = Form(...),
+    label: Optional[str] = Form(None),
+    frame_skip: int = Form(30),
+):
+    """Download + analyse a YouTube video via yt-dlp."""
+    if not YOUTUBE_PATTERN.search(youtube_url):
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+    try:
+        info = _extract_youtube_stream(youtube_url)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"yt-dlp error: {e}")
+
+    # Register in DB (no file yet — treated as a URL video)
+    db = DatabaseService()
+    video_id = db.register_video(
+        camera_id=camera_id,
+        label=label or info["title"],
+        filename=info["title"],
+        file_path=youtube_url,
+    )
+
+    background_tasks.add_task(
+        process_video_task,
+        source=info["stream_url"],
+        camera_id=camera_id,
+        video_id=str(video_id) if video_id else None,
+        frame_skip=frame_skip,
+    )
+
+    return {
+        "status": "processing_started",
+        "message": "YouTube video queued for AI processing.",
+        "camera_id": camera_id,
+        "title": info["title"],
+        "duration": info["duration"],
+        "thumbnail": info["thumbnail"],
+        "video_id": str(video_id) if video_id else None,
     }
 
 # --- API endpoints สำหรับลบข้อมูล (สำหรับทดสอบ) ---
