@@ -4,211 +4,174 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 // ─── Types ────────────────────────────────────────────────────
 
-interface BoundingBox {
-  id: string;
-  x: number;      // 0–1 (relative)
-  y: number;
-  w: number;
-  h: number;
-  label: string;  // "Red Shirt"
-  color: "green" | "red" | "yellow";
-  confidence: number;
-}
-
 interface CameraOption {
   id: string;
   name: string;
-  location: string;
-  streamUrl: string;
-  status: "online" | "offline";
+  source_url: string;
+  is_active: boolean;
+  is_processing: boolean;
 }
 
-// ─── Mock data ────────────────────────────────────────────────
+interface DetectionCard {
+  id: string;
+  track_id: number;
+  timestamp: string;
+  image_url: string | null;
+  category: string;
+  class_name: string;
+  color_profile: Record<string, number>;
+}
 
-const MOCK_CAMERAS: CameraOption[] = [
-  { id: "CAM-01", name: "Main Entrance", location: "Gate A", streamUrl: "", status: "online" },
-  { id: "CAM-02", name: "Corridor B",   location: "Floor 2", streamUrl: "", status: "online" },
-  { id: "CAM-03", name: "Parking Lot",  location: "Zone C",  streamUrl: "", status: "online" },
-  { id: "CAM-04", name: "Exit Gate",    location: "Gate D",  streamUrl: "", status: "offline" },
-];
+// ─── Utilities ────────────────────────────────────────────────
 
-const MOCK_BOXES: BoundingBox[] = [
-  { id: "p1", x: 0.12, y: 0.2,  w: 0.14, h: 0.55, label: "Red Shirt",    color: "green", confidence: 0.94 },
-  { id: "p2", x: 0.45, y: 0.25, w: 0.12, h: 0.50, label: "Black Hoodie", color: "green", confidence: 0.88 },
-  { id: "p3", x: 0.72, y: 0.18, w: 0.13, h: 0.58, label: "Blue Jeans",   color: "red",   confidence: 0.71 },
-];
+function getYoutubeEmbedUrl(url: string): string | null {
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  if (match && match[2].length === 11) {
+    return `https://www.youtube.com/embed/${match[2]}?autoplay=1&mute=1&controls=0&modestbranding=1`;
+  }
+  return null;
+}
 
 // ─── Component ────────────────────────────────────────────────
 
 export default function LiveVideoCanvas() {
-  const [selectedCamera, setSelectedCamera] = useState<CameraOption>(MOCK_CAMERAS[0]);
+  const [cameras, setCameras] = useState<CameraOption[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<CameraOption | null>(null);
   const [showCameraList, setShowCameraList] = useState(false);
-  const [hoveredBox, setHoveredBox] = useState<BoundingBox | null>(null);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const [boxes, setBoxes] = useState<BoundingBox[]>(MOCK_BOXES);
+  const [detections, setDetections] = useState<DetectionCard[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [frameCount, setFrameCount] = useState(0);
-  const [fps, setFps] = useState(0);
+  const [isStartingAI, setIsStartingAI] = useState(false);
+  const [isStoppingAI, setIsStoppingAI] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLImageElement>(null);
-  const fpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const frameRef = useRef(0);
+  const streamKeyRef = useRef<number>(Date.now()); // Used to force image reload if needed
 
-  // Simulate frame counter + FPS
+  // Fetch cameras
   useEffect(() => {
-    fpsIntervalRef.current = setInterval(() => {
-      setFps(frameRef.current);
-      frameRef.current = 0;
-    }, 1000);
+    const fetchCameras = async () => {
+      try {
+        const res = await fetch("/api/dashboard/cameras");
+        if (res.ok) {
+          const data = await res.json();
+          const cams: CameraOption[] = data.cameras || [];
+          setCameras(cams);
 
-    const frameTimer = setInterval(() => {
-      frameRef.current += 1;
-      setFrameCount((c) => c + 1);
-    }, 33); // ~30fps
-
-    return () => {
-      if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current);
-      clearInterval(frameTimer);
+          setSelectedCamera(prevSelected => {
+            if (!prevSelected) {
+              return cams.length > 0 ? cams[0] : null;
+            }
+            // Update the selected camera with fresh data from server (e.g. is_processing changed)
+            const freshCam = cams.find(c => c.id === prevSelected.id);
+            return freshCam || prevSelected;
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch cameras:", err);
+      }
     };
-  }, []);
+    fetchCameras();
+    const t = setInterval(fetchCameras, 30000); // 30s refresh for camera list
+    return () => clearInterval(t);
+  }, [selectedCamera]);
 
-  // Animate bounding boxes slightly (jitter) for realism
+  // Fetch latest detections for the selected camera
   useEffect(() => {
-    const jitter = setInterval(() => {
-      setBoxes((prev) =>
-        prev.map((b) => ({
-          ...b,
-          x: b.x + (Math.random() - 0.5) * 0.002,
-          y: b.y + (Math.random() - 0.5) * 0.001,
-        }))
-      );
-    }, 100);
-    return () => clearInterval(jitter);
-  }, []);
+    if (!selectedCamera?.is_processing) {
+      setDetections([]);
+      return;
+    }
 
-  // Draw bounding boxes on canvas overlay
-  const drawBoxes = useCallback(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+    const fetchDetections = async () => {
+      try {
+        const res = await fetch(`/api/dashboard/latest-detections/${selectedCamera.id}?limit=5`);
+        if (res.ok) {
+          const data = await res.json();
+          setDetections(data.detections || []);
+        }
+      } catch (err) {
+        console.error("Failed to fetch detections:", err);
+      }
+    };
 
-    const { width, height } = container.getBoundingClientRect();
-    canvas.width = width;
-    canvas.height = height;
+    fetchDetections();
+    const t = setInterval(fetchDetections, 4000);
+    return () => clearInterval(t);
+  }, [selectedCamera]);
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, width, height);
+  // Handle camera selection
+  const handleSelectCamera = (cam: CameraOption) => {
+    setSelectedCamera(cam);
+    setShowCameraList(false);
+    streamKeyRef.current = Date.now(); // Force stream img refresh
+  };
 
-    boxes.forEach((box) => {
-      const x = box.x * width;
-      const y = box.y * height;
-      const w = box.w * width;
-      const h = box.h * height;
+  // Handle Stop Prediction
+  const stopPrediction = async () => {
+    if (!selectedCamera || !selectedCamera.is_processing) return;
 
-      const color = box.color === "green"
-        ? "#39ff14"
-        : box.color === "red"
-        ? "#ff3b3b"
-        : "#ffd700";
+    setIsStoppingAI(true);
+    try {
+      const res = await fetch(`/api/dashboard/prediction/${selectedCamera.id}/stop`, {
+        method: "POST"
+      });
+      if (res.ok) {
+        // Optimistic update
+        setSelectedCamera(prev => prev ? { ...prev, is_processing: false } : null);
+        setCameras(prev => prev.map(c => c.id === selectedCamera.id ? { ...c, is_processing: false } : c));
+        streamKeyRef.current = Date.now();
+      }
+    } catch (err) {
+      console.error("Failed to stop prediction:", err);
+    } finally {
+      setIsStoppingAI(false);
+    }
+  };
 
-      const isHovered = hoveredBox?.id === box.id;
+  // Handle Start Prediction
+  const startPrediction = async () => {
+    if (!selectedCamera || selectedCamera.is_processing) return;
 
-      // Outer glow
-      ctx.shadowColor = color;
-      ctx.shadowBlur = isHovered ? 16 : 8;
+    setIsStartingAI(true);
+    try {
+      const res = await fetch(`/api/dashboard/prediction/${selectedCamera.id}/start`, {
+        method: "POST"
+      });
+      if (res.ok) {
+        setSelectedCamera(prev => prev ? { ...prev, is_processing: true } : null);
+        setCameras(prev => prev.map(c => c.id === selectedCamera.id ? { ...c, is_processing: true } : c));
+        streamKeyRef.current = Date.now();
+      }
+    } catch (err) {
+      console.error("Failed to start prediction:", err);
+    } finally {
+      setIsStartingAI(false);
+    }
+  };
 
-      // Box
-      ctx.strokeStyle = color;
-      ctx.lineWidth = isHovered ? 2 : 1.5;
-      ctx.setLineDash([]);
-      ctx.strokeRect(x, y, w, h);
+  if (!selectedCamera) {
+    return (
+      <div className="hud-panel flex flex-col items-center justify-center min-h-0 text-slate-500 font-mono text-xs">
+        Loading Cameras...
+      </div>
+    );
+  }
 
-      // Corner brackets
-      const cs = 10;
-      ctx.lineWidth = 2.5;
-      ctx.shadowBlur = 4;
-      // TL
-      ctx.beginPath(); ctx.moveTo(x, y + cs); ctx.lineTo(x, y); ctx.lineTo(x + cs, y); ctx.stroke();
-      // TR
-      ctx.beginPath(); ctx.moveTo(x + w - cs, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + cs); ctx.stroke();
-      // BL
-      ctx.beginPath(); ctx.moveTo(x, y + h - cs); ctx.lineTo(x, y + h); ctx.lineTo(x + cs, y + h); ctx.stroke();
-      // BR
-      ctx.beginPath(); ctx.moveTo(x + w - cs, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cs); ctx.stroke();
-
-      ctx.shadowBlur = 0;
-
-      // Label tag (top-left of box)
-      const tagPad = 4;
-      const tagH = 16;
-      const tag = `${box.label} ${Math.round(box.confidence * 100)}%`;
-      ctx.font = "bold 10px 'Share Tech Mono', monospace";
-      const tagW = ctx.measureText(tag).width + tagPad * 2;
-
-      ctx.fillStyle = color + "33";
-      ctx.fillRect(x, y - tagH, tagW, tagH);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x, y - tagH, tagW, tagH);
-
-      ctx.fillStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 4;
-      ctx.fillText(tag, x + tagPad, y - tagH + 11);
-      ctx.shadowBlur = 0;
-
-      // Scan line inside box (animated using frameCount)
-      const scanY = y + ((frameCount * 2) % h);
-      const grad = ctx.createLinearGradient(x, scanY - 6, x, scanY + 6);
-      grad.addColorStop(0, "transparent");
-      grad.addColorStop(0.5, color + "40");
-      grad.addColorStop(1, "transparent");
-      ctx.fillStyle = grad;
-      ctx.fillRect(x + 1, scanY - 6, w - 2, 12);
-    });
-  }, [boxes, hoveredBox, frameCount]);
-
-  useEffect(() => {
-    drawBoxes();
-  }, [drawBoxes]);
-
-  // Handle hover detection on canvas
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = (e.clientX - rect.left) / rect.width;
-      const my = (e.clientY - rect.top) / rect.height;
-
-      setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-
-      const hit = boxes.find(
-        (b) => mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h
-      );
-      setHoveredBox(hit ?? null);
-    },
-    [boxes]
-  );
-
-  const handleMouseLeave = () => setHoveredBox(null);
+  const isOnline = selectedCamera.is_active;
 
   return (
-    <div className="hud-panel flex flex-col min-h-0 overflow-hidden">
+    <div className="hud-panel flex flex-col min-h-0 overflow-hidden relative">
       {/* ── Top bar ── */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-cyan-900/30 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-cyan-900/30 flex-shrink-0 bg-slate-950/80 z-20">
         {/* Camera selector */}
         <div className="relative">
           <button
             onClick={() => setShowCameraList((s) => !s)}
             className="flex items-center gap-2 group"
           >
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
             <span className="font-orbitron text-[10px] text-cyan-400 tracking-widest group-hover:text-cyan-300 transition-colors">
-              {selectedCamera.name}
+              {selectedCamera.name.toUpperCase()}
             </span>
             <span className="font-mono text-[8px] text-slate-600 ml-1">
               {selectedCamera.id}
@@ -220,31 +183,69 @@ export default function LiveVideoCanvas() {
 
           {/* Dropdown */}
           {showCameraList && (
-            <div className="absolute top-full left-0 mt-1 z-50 w-52 glass border border-cyan-900/50 rounded-sm shadow-xl">
-              {MOCK_CAMERAS.map((cam) => (
+            <div className="absolute top-full left-0 mt-1 z-50 w-64 glass border border-cyan-900/50 rounded-sm shadow-xl max-h-60 overflow-y-auto">
+              {cameras.map((cam) => (
                 <button
                   key={cam.id}
-                  onClick={() => { setSelectedCamera(cam); setShowCameraList(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-cyan-950/40 transition-colors text-left"
+                  onClick={() => handleSelectCamera(cam)}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-cyan-950/40 transition-colors text-left border-b border-cyan-900/20 last:border-0"
                 >
-                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cam.status === "online" ? "bg-green-500" : "bg-red-500"}`} />
-                  <div>
+                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cam.is_active ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
+                  <div className="flex-1">
                     <div className="font-mono text-[10px] text-slate-300">{cam.name}</div>
-                    <div className="font-mono text-[8px] text-slate-600">{cam.id} · {cam.location}</div>
+                    <div className="font-mono text-[8px] text-slate-600">{cam.id}</div>
                   </div>
+                  {cam.is_processing && (
+                    <span className="font-mono text-[8px] px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-400 border border-cyan-800">
+                      AI ACTIVE
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* Right: FPS + Controls */}
-        <div className="flex items-center gap-3">
-          <span className="font-mono text-[9px] text-slate-600">
-            FPS <span className="text-cyan-600">{fps}</span>
-          </span>
-          <span className="font-mono text-[9px] text-slate-600">
-            DET <span className="text-green-500">{boxes.length}</span>
+        {/* Right Controls */}
+        <div className="flex items-center gap-4">
+          <span className="font-mono text-[9px] text-slate-600 flex items-center gap-1.5">
+            AI:
+            {selectedCamera.is_processing ? (
+              <div className="flex items-center gap-2">
+                <span className={"text-cyan-400"}>
+                  PROCESSING
+                </span>
+                <button
+                  onClick={stopPrediction}
+                  disabled={isStoppingAI}
+                  className="px-1.5 py-0.5 hover:bg-red-900/50 rounded transition-colors text-red-500 hover:text-red-400 border border-transparent hover:border-red-800 disabled:opacity-50"
+                  title={"Stop AI and return to native stream"}
+                >
+                  {isStoppingAI ? (
+                    <div className="w-3 h-3 border-2 border-red-500/30 border-t-red-400 rounded-full animate-spin" />
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3">
+                      <rect x="6" y="6" width="12" height="12" rx="1" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={startPrediction}
+                disabled={isStartingAI}
+                className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 hover:bg-cyan-900/50 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-700 rounded transition-all disabled:opacity-50"
+              >
+                {isStartingAI ? (
+                  <div className="w-3 h-3 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+                ) : (
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                )}
+                <span>START AI</span>
+              </button>
+            )}
           </span>
           <button
             onClick={() => setIsFullscreen((s) => !s)}
@@ -264,149 +265,189 @@ export default function LiveVideoCanvas() {
       {/* ── Video area ── */}
       <div
         ref={containerRef}
-        className="relative flex-1 bg-slate-950 overflow-hidden cursor-crosshair min-h-0"
+        className="relative flex-1 bg-black overflow-hidden flex items-center justify-center min-h-0"
         style={{ minHeight: 0 }}
       >
-        {selectedCamera.status === "offline" ? (
+        {!isOnline ? (
           /* Offline state */
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-            <div className="w-12 h-12 border border-red-900/60 rounded-full flex items-center justify-center">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-red-700">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950">
+            <div className="w-12 h-12 border border-red-900/60 rounded-full flex items-center justify-center bg-red-950/20">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-red-500">
                 <path d="M18.364 5.636a9 9 0 11-12.728 0M12 3v9" />
               </svg>
             </div>
-            <p className="font-mono text-[10px] text-red-700 tracking-widest">SIGNAL LOST</p>
-            <p className="font-mono text-[9px] text-slate-700">{selectedCamera.id} · {selectedCamera.location}</p>
+            <p className="font-mono text-[10px] text-red-500 tracking-widest">CAMERA OFFLINE</p>
+            <p className="font-mono text-[9px] text-slate-600">{selectedCamera.id}</p>
           </div>
         ) : (
           <>
-            {/* Simulated video feed via CSS noise + gradient */}
-            <div className="absolute inset-0">
-              {/* Static "video" background - in production replace with <img> MJPEG or <video> */}
-              <div
-                className="w-full h-full animate-flicker"
-                style={{
-                  background: `
-                    radial-gradient(ellipse at 30% 40%, rgba(0,30,15,0.9) 0%, transparent 60%),
-                    radial-gradient(ellipse at 70% 60%, rgba(5,10,30,0.9) 0%, transparent 60%),
-                    linear-gradient(160deg, #050d18 0%, #0a1520 50%, #060e14 100%)
-                  `,
-                }}
-              />
+            {/* Live MJPEG Stream or Native Player */}
+            <div className="w-full h-full relative">
+              {(() => {
+                if (selectedCamera.is_processing) {
+                  return (
+                    // ── Active AI Stream ──
+                    <img
+                      key={streamKeyRef.current} // forces reload when camera changes
+                      src={`/api/dashboard/mjpeg/${selectedCamera.id}`}
+                      alt="Live MJPEG Stream"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.parentElement?.classList.add('stream-error');
+                      }}
+                    />
+                  );
+                }
 
-              {/* Simulated person silhouettes */}
-              {boxes.map((box) => (
-                <div
-                  key={box.id}
-                  className="absolute opacity-30"
-                  style={{
-                    left: `${box.x * 100}%`,
-                    top: `${box.y * 100}%`,
-                    width: `${box.w * 100}%`,
-                    height: `${box.h * 100}%`,
-                    background: `linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.04) 100%)`,
-                    borderRadius: "2px",
-                  }}
-                />
-              ))}
+                // ── Inactive Local/Native Video ──
+                const ytEmbed = getYoutubeEmbedUrl(selectedCamera.source_url);
+                if (ytEmbed) {
+                  return (
+                    <iframe
+                      src={ytEmbed}
+                      className="w-full h-full object-cover pointer-events-none"
+                      allow="autoplay; encrypted-media"
+                      title="YouTube stream"
+                    />
+                  );
+                }
 
-              {/* Scanline overlay */}
-              <div
-                className="absolute inset-0 pointer-events-none"
-                style={{
-                  background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px)",
-                }}
-              />
+                // Other source types fallback
+                return (
+                  <div className="flex items-center justify-center w-full h-full bg-slate-900 flex-col gap-2">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-slate-700">
+                      <path d="M15 10l4.553-2.277A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <p className="font-mono text-xs text-slate-500 tracking-widest">RAW RTSP PREVIEW UNAVAILABLE</p>
+                    <p className="font-mono text-[9px] text-slate-600">Click START AI to begin processing & view stream</p>
+                  </div>
+                );
+              })()}
 
-              {/* Vignette */}
-              <div
-                className="absolute inset-0 pointer-events-none"
-                style={{
-                  background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%)",
-                }}
-              />
+              <div className="error-overlay hidden absolute inset-0 flex-col items-center justify-center gap-3 bg-slate-950 text-slate-500">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-slate-700">
+                  <path d="M15 10l4.553-2.277A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                <p className="font-mono text-xs">STREAM UNAVAILABLE</p>
+              </div>
             </div>
 
-            {/* Canvas overlay for bounding boxes */}
-            <canvas
-              ref={canvasRef}
-              className="absolute inset-0 w-full h-full"
-              onMouseMove={handleMouseMove}
-              onMouseLeave={handleMouseLeave}
+            {/* Scanning Overlay Effect */}
+            <div
+              className="absolute inset-0 pointer-events-none opacity-20"
+              style={{
+                background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.4) 2px,rgba(0,0,0,0.4) 4px)",
+              }}
             />
 
-            {/* Hover tooltip */}
-            {hoveredBox && (
-              <div
-                className="absolute z-10 pointer-events-none glass border border-cyan-500/40 px-2.5 py-2 rounded-sm shadow-neon-cyan"
-                style={{
-                  left: mousePos.x + 12,
-                  top: mousePos.y + 12,
-                  transform: mousePos.x > (containerRef.current?.offsetWidth ?? 0) * 0.7 ? "translateX(-110%)" : undefined,
-                }}
-              >
-                <div className="font-orbitron text-[9px] text-cyan-400 tracking-wider mb-1">DETECTED</div>
-                <div className="font-mono text-[10px] text-slate-200">{hoveredBox.label}</div>
-                <div className="font-mono text-[9px] text-slate-500 mt-0.5">
-                  CONF: <span className="text-cyan-400">{Math.round(hoveredBox.confidence * 100)}%</span>
-                </div>
-                <div className="font-mono text-[9px] text-slate-500">ID: {hoveredBox.id}</div>
+            {/* Detection Cards Overlay (Right Side) */}
+            {selectedCamera.is_processing && detections.length > 0 && (
+              <div className="absolute right-4 top-4 bottom-4 w-48 flex flex-col gap-2 overflow-y-auto pointer-events-none mask-fade-y">
+                {detections.map((det) => (
+                  <div key={det.id} className="bg-slate-950/80 border border-cyan-900/50 rounded-sm p-2 flex gap-2 backdrop-blur-sm shadow-xl pointer-events-auto transition-all hover:border-cyan-500/50">
+                    {det.image_url ? (
+                      <img src={det.image_url} alt="Crop" className="w-10 h-14 object-cover rounded-sm border border-slate-800" />
+                    ) : (
+                      <div className="w-10 h-14 bg-slate-900 flex items-center justify-center border border-slate-800 rounded-sm">
+                        <span className="text-[8px] text-slate-600">NO IMG</span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0 flex flex-col justify-center">
+                      <div className="font-orbitron text-[9px] text-cyan-400 truncate">{det.class_name.toUpperCase()}</div>
+                      <div className="font-mono text-[8px] text-slate-400 mt-0.5">{det.category}</div>
+                      <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                        {Object.entries(det.color_profile).slice(0, 3).map(([color, pct], i) => (
+                          <div
+                            key={i}
+                            className="w-2.5 h-2.5 rounded-full border border-slate-700"
+                            style={{ backgroundColor: color, opacity: pct }}
+                            title={`${color} ${(pct * 100).toFixed(0)}%`}
+                          />
+                        ))}
+                      </div>
+                      <div className="font-mono text-[7px] text-slate-600 mt-1 truncate">
+                        ID: {det.track_id}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
             {/* Corner HUD decorations */}
-            <div className="absolute top-2 left-2 pointer-events-none">
-              <div className="font-mono text-[8px] text-cyan-900 tracking-wider">
-                {selectedCamera.id} · {selectedCamera.location}
+            <div className="absolute top-3 left-3 pointer-events-none">
+              <div className="font-mono text-[9px] text-cyan-400 tracking-wider font-bold drop-shadow-md">
+                {selectedCamera.id}
+              </div>
+              <div className="font-mono text-[8px] text-white/70 tracking-widest mt-0.5 drop-shadow-md">
+                LIVE STREAM
               </div>
             </div>
 
-            {/* REC indicator */}
-            <div className="absolute top-2 right-2 flex items-center gap-1.5 pointer-events-none">
-              <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              <span className="font-mono text-[8px] text-red-500 tracking-widest">REC</span>
-            </div>
+            {/* REC indicator if AI is processing */}
+            {selectedCamera.is_processing && (
+              <div className={`absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-0.5 border rounded pointer-events-none transition-colors
+                bg-red-950/50 border-red-900/50`
+              }>
+                <div className={`w-1.5 h-1.5 rounded-full animate-pulse bg-red-500 box-shadow-red`} />
+                <span className={`font-mono text-[8px] tracking-widest font-bold text-red-400`}>
+                  ANALYSIS ACTIVE
+                </span>
+              </div>
+            )}
 
             {/* Bottom timestamp */}
-            <div className="absolute bottom-2 left-2 font-mono text-[8px] text-slate-700 pointer-events-none">
+            <div className="absolute bottom-3 left-3 bg-black/50 px-1.5 py-0.5 rounded font-mono text-[9px] text-slate-300 pointer-events-none border border-slate-800/50">
               <LiveTimestamp />
-            </div>
-
-            {/* Crosshair center */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
-              <div className="relative w-8 h-8">
-                <div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-400 -translate-x-1/2" />
-                <div className="absolute top-1/2 left-0 right-0 h-px bg-cyan-400 -translate-y-1/2" />
-                <div className="absolute inset-1 border border-cyan-400 rounded-full" />
-              </div>
             </div>
           </>
         )}
       </div>
 
       {/* ── Bottom bar: camera strip ── */}
-      <div className="flex items-center gap-2 px-3 py-2 border-t border-cyan-900/20 flex-shrink-0 overflow-x-auto">
-        {MOCK_CAMERAS.map((cam) => (
+      <div className="flex items-center gap-2 px-3 py-2 border-t border-cyan-900/30 flex-shrink-0 overflow-x-auto bg-slate-950/80 z-20">
+        {cameras.map((cam) => (
           <button
             key={cam.id}
-            onClick={() => setSelectedCamera(cam)}
+            onClick={() => handleSelectCamera(cam)}
             className={`
-              flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-sm border transition-all
-              ${selectedCamera.id === cam.id
-                ? "border-cyan-500/60 bg-cyan-950/40 text-cyan-400"
-                : "border-slate-800 bg-transparent text-slate-600 hover:border-slate-700 hover:text-slate-400"
+              flex-shrink-0 flex flex-col px-3 py-1.5 rounded-sm border transition-all min-w-[100px]
+              ${selectedCamera?.id === cam.id
+                ? "border-cyan-500/60 bg-cyan-950/50 shadow-[0_0_10px_rgba(6,182,212,0.1)]"
+                : "border-slate-800/80 bg-slate-900/30 hover:border-slate-700 hover:bg-slate-900/60"
               }
             `}
           >
-            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cam.status === "online" ? "bg-green-500" : "bg-red-600"}`} />
-            <span className="font-mono text-[9px] tracking-wider">{cam.id}</span>
+            <div className="flex items-center gap-1.5 mb-1">
+              <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cam.is_active ? "bg-green-500" : "bg-red-600"}`} />
+              <span className={`font-mono text-[9px] tracking-wider font-bold ${selectedCamera?.id === cam.id ? "text-cyan-400" : "text-slate-400"}`}>
+                {cam.id}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 justify-between w-full">
+              <span className="font-orbitron text-[8px] text-slate-500 truncate max-w-[60px]">{cam.name}</span>
+              {cam.is_processing && (
+                <span className="flex items-center gap-1">
+                  <span className={`w-1 h-1 rounded-full animate-pulse bg-cyan-400`} />
+                  <span className={`font-mono text-[7px] text-cyan-600`}>AI</span>
+                </span>
+              )}
+            </div>
           </button>
         ))}
-        <div className="flex-1" />
-        <span className="font-mono text-[8px] text-slate-700 flex-shrink-0 tracking-widest">
-          {MOCK_CAMERAS.filter(c => c.status === "online").length}/{MOCK_CAMERAS.length} ONLINE
-        </span>
+        {cameras.length === 0 && (
+          <div className="font-mono text-[9px] text-slate-600 w-full text-center py-2">NO CAMERAS CONFIGURED</div>
+        )}
       </div>
+
+      <style dangerouslySetInnerHTML={{
+        __html: `
+         .stream-error + .error-overlay { display: flex; }
+         .box-shadow-red { box-shadow: 0 0 8px rgba(239, 68, 68, 0.6); }
+         .box-shadow-yellow { box-shadow: 0 0 8px rgba(234, 179, 8, 0.6); }
+         .mask-fade-y { mask-image: linear-gradient(to bottom, transparent, black 5%, black 95%, transparent); }
+      `}} />
     </div>
   );
 }

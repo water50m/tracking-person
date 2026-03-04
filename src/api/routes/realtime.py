@@ -21,32 +21,29 @@ async def events_stream(
     async def event_generator():
         try:
             # Send initial connection message
-            yield {
-                "data": json.dumps({
-                    "type": "connected",
-                    "timestamp": datetime.now().isoformat(),
-                    "message": "Event stream connected"
-                })
-            }
+            msg = json.dumps({
+                "type": "connected",
+                "timestamp": datetime.now().isoformat(),
+                "message": "Event stream connected"
+            })
+            yield f"data: {msg}\n\n"
             
             # Keep connection alive with periodic heartbeat
             while True:
                 await asyncio.sleep(30)  # 30 seconds heartbeat
-                yield {
-                    "data": json.dumps({
-                        "type": "heartbeat",
-                        "timestamp": datetime.now().isoformat()
-                    })
-                }
+                msg = json.dumps({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now().isoformat()
+                })
+                yield f"data: {msg}\n\n"
                 
         except asyncio.CancelledError:
             # Client disconnected
-            yield {
-                "data": json.dumps({
-                    "type": "disconnected",
-                    "timestamp": datetime.now().isoformat()
-                })
-            }
+            msg = json.dumps({
+                "type": "disconnected",
+                "timestamp": datetime.now().isoformat()
+            })
+            yield f"data: {msg}\n\n"
     
     return StreamingResponse(
         event_generator(),

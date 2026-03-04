@@ -44,9 +44,24 @@ export default function RTSPTab() {
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "done">("idle");
   const [addStatus, setAddStatus] = useState<"idle" | "adding" | "done" | "error">("idle");
   const [selectedStream, setSelectedStream] = useState<RTSPStream | null>(null);
+  const [activeStreams, setActiveStreams] = useState<string[]>([]);
+  const [stoppingCams, setStoppingCams] = useState<Set<string>>(new Set());
   const addTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Simulate periodic status changes ──────────────────────
+  // ── Poll active AI streams every 5s ───────────────────────
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch("/api/video/active-streams");
+        if (r.ok) { const d = await r.json(); setActiveStreams(d.active ?? []); }
+      } catch { /* ignore */ }
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── Simulate periodic FPS jitter ──────────────────────────
   useEffect(() => {
     const t = setInterval(() => {
       setStreams((prev) =>
@@ -152,6 +167,16 @@ export default function RTSPTab() {
           : s
       )
     );
+  };
+
+  // ── Stop AI processing ────────────────────────────────────
+  const handleStop = async (camId: string) => {
+    setStoppingCams((s) => new Set(s).add(camId));
+    try {
+      await fetch(`/api/video/stop/${encodeURIComponent(camId)}`, { method: "POST" });
+      setActiveStreams((prev) => prev.filter((id) => id !== camId));
+    } catch { /* ignore */ }
+    setStoppingCams((s) => { const n = new Set(s); n.delete(camId); return n; });
   };
 
   const liveCount = streams.filter((s) => s.status === "live").length;
@@ -312,8 +337,8 @@ export default function RTSPTab() {
 
         {/* Column headers */}
         <div className="grid gap-2 px-4 py-1.5 border-b border-slate-800/30 flex-shrink-0"
-          style={{ gridTemplateColumns: "90px 1fr 120px 90px 80px 70px 100px" }}>
-          {["CAM ID", "URL / LABEL", "STATUS", "RESOLUTION", "FPS", "LATENCY", "ACTIONS"].map((h) => (
+          style={{ gridTemplateColumns: "90px 1fr 110px 90px 70px 60px 110px 110px" }}>
+          {["CAM ID", "URL / LABEL", "STATUS", "RESOLUTION", "FPS", "LAT", "AI STATUS", "ACTIONS"].map((h) => (
             <span key={h} className="font-mono text-[9px] text-slate-700 tracking-widest uppercase">{h}</span>
           ))}
         </div>
@@ -333,9 +358,12 @@ export default function RTSPTab() {
                 key={stream.camera_id}
                 stream={stream}
                 selected={selectedStream?.camera_id === stream.camera_id}
+                isProcessing={activeStreams.includes(stream.camera_id)}
+                isStopping={stoppingCams.has(stream.camera_id)}
                 onSelect={() => setSelectedStream(stream.camera_id === selectedStream?.camera_id ? null : stream)}
                 onRemove={() => handleRemove(stream.camera_id)}
                 onToggle={() => handleToggle(stream.camera_id)}
+                onStop={() => handleStop(stream.camera_id)}
               />
             ))
           )}
@@ -369,15 +397,21 @@ export default function RTSPTab() {
 function StreamRow({
   stream,
   selected,
+  isProcessing,
+  isStopping,
   onSelect,
   onRemove,
   onToggle,
+  onStop,
 }: {
   stream: RTSPStream;
   selected: boolean;
+  isProcessing: boolean;
+  isStopping: boolean;
   onSelect: () => void;
   onRemove: () => void;
   onToggle: () => void;
+  onStop: () => void;
 }) {
   const style = STATUS_STYLE[stream.status];
   const accent = CAMERA_ACCENTS[stream.camera_id] ?? DEFAULT_ACCENT;
@@ -396,8 +430,9 @@ function StreamRow({
       className={`
         grid gap-2 px-4 py-2.5 items-center cursor-pointer transition-all
         ${selected ? "bg-slate-800/40" : "hover:bg-slate-900/30"}
+        ${isProcessing ? "border-l-2 border-cyan-500/40" : "border-l-2 border-transparent"}
       `}
-      style={{ gridTemplateColumns: "90px 1fr 120px 90px 80px 70px 100px" }}
+      style={{ gridTemplateColumns: "90px 1fr 110px 90px 70px 60px 110px 110px" }}
       onClick={onSelect}
     >
       {/* Cam ID */}
@@ -430,6 +465,18 @@ function StreamRow({
         {stream.status === "live" ? `${30 + Math.floor(Math.random() * 20)}ms` : "—"}
       </span>
 
+      {/* AI STATUS */}
+      <div>
+        {isProcessing ? (
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="font-mono text-[9px] text-cyan-400 tracking-widest">ANALYZING</span>
+          </div>
+        ) : (
+          <span className="font-mono text-[9px] text-slate-700">—</span>
+        )}
+      </div>
+
       {/* Actions */}
       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
         {/* Toggle */}
@@ -447,6 +494,22 @@ function StreamRow({
             <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path d="M8 5v14l11-7z" /></svg>
           )}
         </button>
+
+        {/* STOP AI */}
+        {isProcessing && (
+          <button
+            onClick={onStop}
+            disabled={isStopping}
+            title="Stop AI prediction"
+            className="p-1 rounded-sm border border-cyan-800/60 text-cyan-500 hover:border-red-600/60 hover:text-red-400 transition-colors disabled:opacity-40"
+          >
+            {isStopping ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3 animate-spin"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83" /></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+            )}
+          </button>
+        )}
 
         {/* Remove */}
         <button

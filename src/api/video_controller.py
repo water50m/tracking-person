@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
+import asyncio
 import shutil
 import os
 import re
@@ -10,6 +11,43 @@ from src.api.schemas import DetectionResponse
 import yt_dlp
 
 router = APIRouter()
+
+# ─── Active stream registry ────────────────────────────────────
+# camera_id → asyncio.Event  (set the event to request stop)
+_ACTIVE_STREAMS: dict[str, asyncio.Event] = {}
+
+
+def _register_stream(camera_id: str) -> asyncio.Event:
+    """Register a new active stream, raising 409 if already running."""
+    if camera_id in _ACTIVE_STREAMS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Camera '{camera_id}' already has an active processing task. Stop it first.",
+        )
+    event = asyncio.Event()
+    _ACTIVE_STREAMS[camera_id] = event
+    return event
+
+
+def _unregister_stream(camera_id: str) -> None:
+    _ACTIVE_STREAMS.pop(camera_id, None)
+
+
+@router.get("/active-streams")
+async def list_active_streams():
+    """Return camera IDs that are currently being processed."""
+    return {"active": list(_ACTIVE_STREAMS.keys())}
+
+
+@router.post("/stop/{camera_id}")
+async def stop_stream(camera_id: str):
+    """Signal an active processing task to stop gracefully."""
+    event = _ACTIVE_STREAMS.get(camera_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"No active task for camera '{camera_id}'")
+    event.set()
+    return {"status": "stop_requested", "camera_id": camera_id}
+
 
 # สร้างโฟลเดอร์เก็บไฟล์ชั่วคราว
 UPLOAD_DIR = "temp_videos"
@@ -77,12 +115,25 @@ async def stream_video(
     stream_url: str = Form(...),
     frame_skip: int = Form(30, description="Process every N-th frame (default: 30)")
 ):
-    background_tasks.add_task(process_video_task, source=stream_url, camera_id=camera_id, video_id=None, frame_skip=frame_skip)
-    
+    stop_event = _register_stream(camera_id)  # raises 409 if duplicate
+
+    async def _task():
+        try:
+            await process_video_task(
+                source=stream_url,
+                camera_id=camera_id,
+                video_id=None,
+                frame_skip=frame_skip,
+                stop_event=stop_event,
+            )
+        finally:
+            _unregister_stream(camera_id)
+
+    background_tasks.add_task(_task)
     return {
         "status": "stream_connected",
         "camera_id": camera_id,
-        "source": stream_url
+        "source": stream_url,
     }
 
 
@@ -96,23 +147,28 @@ def _extract_youtube_stream(url: str) -> dict:
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "bestvideo[ext=mp4][height<=720]+bestaudio/best[ext=mp4][height<=720]/best",
+        # Allow best live stream formats or fall back to standard best
+        "format": "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best/best[ext=m3u8]",
         "noplaylist": True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         if not info:
             raise ValueError("Could not extract video info from YouTube URL")
+        
+        # Check if it's a live stream
+        is_live = info.get("is_live", False)
+        
         # For merged format the url is in 'url', for adaptive it's in 'requested_downloads'
         stream_url = info.get("url") or (
             info["requested_downloads"][0]["url"] if info.get("requested_downloads") else None
         )
         if not stream_url:
-            # Try first format
+            # Try first format that has a url
             formats = info.get("formats", [])
-            mp4 = [f for f in formats if f.get("ext") == "mp4" and f.get("url")]
-            if mp4:
-                stream_url = mp4[-1]["url"]  # last = highest quality
+            valid_formats = [f for f in formats if f.get("url")]
+            if valid_formats:
+                stream_url = valid_formats[-1]["url"]  # last = usually highest quality
         if not stream_url:
             raise ValueError("No streamable URL found for this video")
         return {
@@ -135,12 +191,16 @@ async def analyze_youtube(
     """Download + analyse a YouTube video via yt-dlp."""
     if not YOUTUBE_PATTERN.search(youtube_url):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+
+    stop_event = _register_stream(camera_id)  # raises 409 if duplicate
+
     try:
         info = _extract_youtube_stream(youtube_url)
     except Exception as e:
+        _unregister_stream(camera_id)          # release lock on yt-dlp error
         raise HTTPException(status_code=422, detail=f"yt-dlp error: {e}")
 
-    # Register in DB (no file yet — treated as a URL video)
+    # Register in DB
     db = DatabaseService()
     video_id = db.register_video(
         camera_id=camera_id,
@@ -149,13 +209,32 @@ async def analyze_youtube(
         file_path=youtube_url,
     )
 
-    background_tasks.add_task(
-        process_video_task,
-        source=info["stream_url"],
-        camera_id=camera_id,
-        video_id=str(video_id) if video_id else None,
-        frame_skip=frame_skip,
-    )
+    # Upsert into cameras table to make it visible on the dashboard
+    try:
+        with db.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO cameras (id, name, source_url, is_active) 
+                VALUES (%s, %s, %s, true)
+                ON CONFLICT (id) DO UPDATE 
+                SET name = EXCLUDED.name, source_url = EXCLUDED.source_url, is_active = true
+            """, (camera_id, label or info["title"], info["stream_url"]))
+            db.conn.commit()
+    except Exception as e:
+        print(f"Warning: Could not upsert camera to table: {e}")
+
+    async def _task():
+        try:
+            await process_video_task(
+                source=info["stream_url"],
+                camera_id=camera_id,
+                video_id=str(video_id) if video_id else None,
+                frame_skip=frame_skip,
+                stop_event=stop_event,
+            )
+        finally:
+            _unregister_stream(camera_id)
+
+    background_tasks.add_task(_task)
 
     return {
         "status": "processing_started",

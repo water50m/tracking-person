@@ -18,23 +18,6 @@ interface StatCard {
   icon: React.ReactNode;
 }
 
-// ─── Mock hourly data ─────────────────────────────────────────
-
-function generateHourlyData(): HourlyPoint[] {
-  const now = new Date();
-  const currentHour = now.getHours();
-  return Array.from({ length: 24 }, (_, i) => {
-    const h = i;
-    const isPeak = h >= 8 && h <= 18;
-    const isCurrent = h === currentHour;
-    const base = isPeak ? 25 + Math.sin((h - 8) * (Math.PI / 10)) * 20 : 5;
-    return {
-      hour: `${String(h).padStart(2, "0")}:00`,
-      count: isCurrent ? Math.floor(base * 0.6) : Math.floor(base + Math.random() * 10),
-    };
-  });
-}
-
 // ─── Sparkline Canvas ─────────────────────────────────────────
 
 function Sparkline({
@@ -54,7 +37,7 @@ function Sparkline({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || data.length === 0) return;
 
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -125,15 +108,19 @@ function Sparkline({
 
     // Current hour dot
     const now = new Date().getHours();
-    const cx = toX(now);
-    const cy = toY(values[now]);
-    ctx.beginPath();
-    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 10;
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    const nowIndex = data.findIndex(d => parseInt(d.hour.split(':')[0]) === now);
+
+    if (nowIndex !== -1 && values[nowIndex] !== undefined) {
+      const cx = toX(nowIndex);
+      const cy = toY(values[nowIndex]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
 
     // Peak label
     const peakIdx = values.indexOf(Math.max(...values));
@@ -142,7 +129,7 @@ function Sparkline({
     ctx.font = "bold 8px 'Share Tech Mono', monospace";
     ctx.fillStyle = color + "cc";
     ctx.textAlign = "center";
-    ctx.fillText("PEAK", px, py);
+    ctx.fillText("PEAK", px, Math.max(8, py));
   }, [data, color, width, height]);
 
   return (
@@ -189,21 +176,23 @@ function AnimatedNumber({ target, suffix = "" }: { target: number; suffix?: stri
 // ─── Main Component ───────────────────────────────────────────
 
 const ACCENT_STYLES = {
-  cyan:   { text: "text-cyan-400",   border: "border-cyan-900/40",  glow: "shadow-[0_0_15px_rgba(0,245,255,0.1)]",  bar: "#00f5ff" },
-  green:  { text: "text-green-400",  border: "border-green-900/40", glow: "shadow-[0_0_15px_rgba(57,255,20,0.1)]",  bar: "#39ff14" },
-  yellow: { text: "text-yellow-400", border: "border-yellow-900/40",glow: "shadow-[0_0_15px_rgba(255,215,0,0.1)]",  bar: "#ffd700" },
-  pink:   { text: "text-pink-400",   border: "border-pink-900/40",  glow: "shadow-[0_0_15px_rgba(255,0,170,0.1)]",  bar: "#ff00aa" },
+  cyan: { text: "text-cyan-400", border: "border-cyan-900/40", glow: "shadow-[0_0_15px_rgba(0,245,255,0.1)]", bar: "#00f5ff" },
+  green: { text: "text-green-400", border: "border-green-900/40", glow: "shadow-[0_0_15px_rgba(57,255,20,0.1)]", bar: "#39ff14" },
+  yellow: { text: "text-yellow-400", border: "border-yellow-900/40", glow: "shadow-[0_0_15px_rgba(255,215,0,0.1)]", bar: "#ffd700" },
+  pink: { text: "text-pink-400", border: "border-pink-900/40", glow: "shadow-[0_0_15px_rgba(255,0,170,0.1)]", bar: "#ff00aa" },
 };
 
 export default function StatsWidget() {
-  const [hourlyData, setHourlyData] = useState<HourlyPoint[]>(generateHourlyData);
+  const [hourlyData, setHourlyData] = useState<HourlyPoint[]>([]);
   const [stats, setStats] = useState({
-    totalToday: 247,
-    activeCameras: 3,
-    detPerHour: 32,
-    suspects: 4,
+    totalToday: 0,
+    activeCameras: 0,
+    totalCameras: 0,
+    detPerHour: 0,
+    suspects: 0, // Mock for now until we have alerts
   });
-    // New state variables for the display values
+
+  // New state variables for the display values
   const [peakHour, setPeakHour] = useState<string>("--:--");
   const [currentHourCount, setCurrentHourCount] = useState<number>(0);
   const [isClient, setIsClient] = useState(false);
@@ -213,41 +202,78 @@ export default function StatsWidget() {
     setIsClient(true);
   }, []);
 
+  // Fetch real stats
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Fetch graph data
+        const statsRes = await fetch("/api/stats/hourly");
+        if (statsRes.ok) {
+          const data = await statsRes.json();
+
+          // Ensure we have 24 hours of data
+          const fullDay: HourlyPoint[] = Array.from({ length: 24 }, (_, i) => ({
+            hour: `${String(i).padStart(2, "0")}:00`,
+            count: 0
+          }));
+
+          let totalDetectionsToday = 0;
+          data.forEach((item: any) => {
+            if (item.hour >= 0 && item.hour < 24) {
+              fullDay[item.hour].count = item.total_detections;
+              totalDetectionsToday += item.total_detections;
+            }
+          });
+
+          setHourlyData(fullDay);
+
+          // Calculate stats
+          const now = new Date().getHours();
+          const currentHourDetections = fullDay[now].count;
+
+          setStats(s => ({
+            ...s,
+            totalToday: totalDetectionsToday,
+            detPerHour: currentHourDetections,
+            suspects: Math.floor(totalDetectionsToday * 0.15) // Mock high conf flags
+          }));
+        }
+
+        // Fetch camera status
+        const camsRes = await fetch("/api/dashboard/cameras");
+        if (camsRes.ok) {
+          const camsData = await camsRes.json();
+          const active = camsData.cameras?.filter((c: any) => c.is_processing).length || 0;
+          const total = camsData.cameras?.length || 0;
+          setStats(s => ({ ...s, activeCameras: active, totalCameras: total }));
+        }
+
+      } catch (err) {
+        console.error("Failed to fetch stats dashboard data", err);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 60000); // 60s refresh
+    return () => clearInterval(interval);
+  }, []);
+
   // 3. Update the display values whenever `hourlyData` changes
   useEffect(() => {
-    if (!isClient) return;
+    if (!isClient || hourlyData.length === 0) return;
 
     // Safe to use Date() here because we are in the browser
     const nowIndex = new Date().getHours();
-    
+
     // Calculate Peak Hour
     const peak = hourlyData.reduce((a, b) => (a.count > b.count ? a : b));
     setPeakHour(peak.hour);
 
     // Calculate Current Hour Count (safely handle index bounds)
-    const current = hourlyData[nowIndex]?.count || 0;
+    const current = hourlyData.find(d => parseInt(d.hour.split(':')[0]) === nowIndex)?.count || 0;
     setCurrentHourCount(current);
 
   }, [hourlyData, isClient]);
-  // Simulate live updates
-  useEffect(() => {
-    const t = setInterval(() => {
-      setStats((s) => ({
-        ...s,
-        totalToday: s.totalToday + Math.floor(Math.random() * 3),
-        detPerHour: Math.max(0, s.detPerHour + Math.floor((Math.random() - 0.5) * 6)),
-      }));
-      setHourlyData((prev) => {
-        const now = new Date().getHours();
-        return prev.map((d, i) =>
-          i === now
-            ? { ...d, count: d.count + Math.floor(Math.random() * 2) }
-            : d
-        );
-      });
-    }, 4000);
-    return () => clearInterval(t);
-  }, []);
 
   const cards: StatCard[] = [
     {

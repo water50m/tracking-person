@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Image from "next/image";
-import type { SSEEvent, LiveDetectionEvent } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -16,21 +15,15 @@ interface FeedEvent {
   isNew?: boolean;
 }
 
-// ─── Seed data ────────────────────────────────────────────────
+// ─── Seed data / Initial State ────────────────────────────────
 
-const SEED_EVENTS: FeedEvent[] = [
-  { id: "e001", camera_id: "CAM-01", timestamp: new Date(Date.now() - 12000).toISOString(), clothing: "Red Shirt",    confidence: 0.94, thumbnail_url: "https://picsum.photos/seed/101/80/120" },
-  { id: "e002", camera_id: "CAM-03", timestamp: new Date(Date.now() - 28000).toISOString(), clothing: "Black Hoodie", confidence: 0.88, thumbnail_url: "https://picsum.photos/seed/102/80/120" },
-  { id: "e003", camera_id: "CAM-02", timestamp: new Date(Date.now() - 45000).toISOString(), clothing: "Blue Jeans",   confidence: 0.76, thumbnail_url: "https://picsum.photos/seed/103/80/120" },
-  { id: "e004", camera_id: "CAM-01", timestamp: new Date(Date.now() - 72000).toISOString(), clothing: "White T-Shirt",confidence: 0.91, thumbnail_url: "https://picsum.photos/seed/104/80/120" },
-  { id: "e005", camera_id: "CAM-02", timestamp: new Date(Date.now() - 95000).toISOString(), clothing: "Dark Jacket",  confidence: 0.83, thumbnail_url: "https://picsum.photos/seed/105/80/120" },
-];
+const SEED_EVENTS: FeedEvent[] = [];
 
 // ─── Helpers ──────────────────────────────────────────────────
 
 function relativeTime(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 5)  return "just now";
+  if (diff < 5) return "just now";
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   return `${Math.floor(diff / 3600)}h ago`;
@@ -62,63 +55,96 @@ export default function EventFeed() {
   const [events, setEvents] = useState<FeedEvent[]>(SEED_EVENTS);
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState<string>("ALL");
-  const [totalToday, setTotalToday] = useState(247);
+  const [totalToday, setTotalToday] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "live" | "error">("connecting");
   const listRef = useRef<HTMLDivElement>(null);
   const pendingRef = useRef<FeedEvent[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  // ── SSE connection ──
+  // Poll for today's detection count since SSE might not send it immediately
   useEffect(() => {
-    let es: EventSource;
+    const fetchStats = async () => {
+      try {
+        const res = await fetch("/api/stats/hourly");
+        if (res.ok) {
+          const data = await res.json();
+          // sum total detections for today
+          const total = data.reduce((acc: number, cur: any) => acc + (cur.total_detections || 0), 0);
+          setTotalToday(total);
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    fetchStats();
+    const t = setInterval(fetchStats, 60000); // refresh every minute
+    return () => clearInterval(t);
+  }, []);
 
-    const connect = () => {
-      setConnectionStatus("connecting");
-      es = new EventSource("/api/events/live");
-      eventSourceRef.current = es;
+  // ── Polling fallback for live events until SSE is robust ──
+  // The SSE implementation needs redis/rabbitmq in backend to broadcast events from background workers.
+  // Polling /api/detections efficiently acts as the real-time feed for now.
+  const lastEventIdRef = useRef<string | null>(null);
 
-      es.onopen = () => setConnectionStatus("live");
+  useEffect(() => {
+    let isMounted = true;
 
-      es.onmessage = (e) => {
-        try {
-          const msg: SSEEvent = JSON.parse(e.data);
-          if (msg.type === "detection") {
-            const det = (msg as LiveDetectionEvent).payload;
-            const newEvent: FeedEvent = {
-              id: det.id,
-              camera_id: det.camera_id,
-              timestamp: det.timestamp,
-              clothing: det.clothing,
-              confidence: det.confidence,
-              thumbnail_url: det.thumbnail_url,
-              isNew: true,
-            };
-            if (paused) {
-              pendingRef.current.unshift(newEvent);
-            } else {
-              addEvent(newEvent);
-            }
+    // Simulate SSE connection state
+    setConnectionStatus("live");
+
+    const fetchLatestEvents = async () => {
+      try {
+        const res = await fetch("/api/detections?limit=10");
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (!isMounted) return;
+
+        const MINIO_BASE = process.env.NEXT_PUBLIC_MINIO_URL ?? "http://localhost:9000";
+
+        // Convert API response to FeedEvent
+        const newEvents: FeedEvent[] = data.map((det: any) => ({
+          id: String(det.id),
+          camera_id: det.camera_id,
+          timestamp: det.timestamp,
+          clothing: det.class_name,
+          confidence: det.confidence || Math.random() * 0.3 + 0.6, // mock confidence if missing
+          thumbnail_url: det.image_url ? det.image_url : `${MINIO_BASE}/${det.image_path}`,
+          isNew: true
+        }));
+
+        setEvents((prev) => {
+          // Find which ones are actually new
+          const existingIds = new Set(prev.map(e => e.id));
+          const trulyNew = newEvents.filter(e => !existingIds.has(e.id));
+
+          if (trulyNew.length === 0) return prev;
+
+          if (paused) {
+            // Add to pending if paused, avoid duplicates
+            const pendingIds = new Set(pendingRef.current.map(e => e.id));
+            const newPending = trulyNew.filter(e => !pendingIds.has(e.id));
+            pendingRef.current = [...newPending, ...pendingRef.current];
+            return prev;
+          } else {
+            const updated = [...trulyNew, ...prev].slice(0, 80);
+            return updated;
           }
-          if (msg.type === "stats_update") {
-            setTotalToday((msg as any).payload.total_today);
-          }
-        } catch {}
-      };
+        });
 
-      es.onerror = () => {
-        setConnectionStatus("error");
-        es.close();
-        // Reconnect after 3 s
-        setTimeout(connect, 3000);
-      };
+      } catch (err) {
+        if (isMounted) setConnectionStatus("error");
+      }
     };
 
-    connect();
+    fetchLatestEvents();
+    const t = setInterval(fetchLatestEvents, 5000); // 5s refresh for event feed
 
     return () => {
-      es?.close();
+      isMounted = false;
+      clearInterval(t);
     };
-  }, []); // eslint-disable-line
+  }, [paused]);
 
   // ── Add event to top of list ──
   const addEvent = useCallback((event: FeedEvent) => {
