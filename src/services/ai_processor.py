@@ -1,5 +1,9 @@
-import cv2
 import os
+# ตั้งค่า FFmpeg Capture Options ให้โหลดตั้งแต่ก่อนเรียก cv2 
+# เพื่อให้แน่ใจว่า C++ backend นำค่าเหล่านี้ไปใช้ในการเปิด Stream (แก้ไขปัญหา HTTP connection ไม่ตรงกัน)
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "http_persistent;0|reconnect;1|reconnect_at_eof;1|reconnect_streamed;1|reconnect_delay_max;5|timeout;10000000|rw_timeout;10000000"
+
+import cv2
 import asyncio
 import uuid
 import time
@@ -70,8 +74,7 @@ async def process_video_task(
         video_source = int(source) if source.isdigit() else source
         
         # เพิ่ม Options ให้ FFmpeg (OpenCV backend) ดึง m3u8 จาก YouTube ได้โดยไม่ตัด connection
-        # แก้ปัญหา: Cannot reuse HTTP connection for different host ด้วย http_persistent;0 
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "http_persistent;0|reconnect;1|reconnect_at_eof;1|reconnect_streamed;1|reconnect_delay_max;2|multiple_requests;1"
+        # ค่าถูกนำไปตั้งไว้ที่บรรทัดบนสุดของไฟล์แล้ว (OPENCV_FFMPEG_CAPTURE_OPTIONS)
         
         cap = cv2.VideoCapture(video_source)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -81,6 +84,9 @@ async def process_video_task(
                 db.update_video_status(video_id, "failed")
             return
 
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_time = 1.0 / fps
+
         # 3. Dedicated thread to continuously read frames and prevent buffering lag
         latest_frame_data = {"count": 0, "frame": None, "ret": True}
         frame_lock = threading.Lock()
@@ -88,7 +94,12 @@ async def process_video_task(
 
         def _reader_thread():
             count = 0
+            # Track start time to maintain absolute pacing
+            stream_start_time = time.perf_counter()
+            
             while capture_running:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 ret, f = cap.read()
                 if not ret:
                     with frame_lock:
@@ -100,38 +111,74 @@ async def process_video_task(
                     latest_frame_data["count"] = count
                     latest_frame_data["frame"] = f
                 
-                # Tiny sleep to yield thread if needed
-                time.sleep(0.001)
+                # Pace the reader exactly to the stream's FPS to prevent 
+                # burst-reading from local files or network buffers like YouTube
+                expected_time = stream_start_time + (count * frame_time)
+                sleep_time = expected_time - time.perf_counter()
+                
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                # If we lag behind real-time by more than 1 second (e.g. network stall), 
+                # reset the baseline so it doesn't try to play catch up at 100x speed
+                elif sleep_time < -1.0:
+                    stream_start_time = time.perf_counter() - (count * frame_time)
 
         reader = threading.Thread(target=_reader_thread, daemon=True)
         reader.start()
 
         # 4. Processing Loop (AI Thread)
         last_processed_count = -1
-        pending_detections = []   # สะสม rows สำหรับ batch insert
         
-        def _flush_detections():
-            """Helper to upload and insert accumulated detections."""
-            if not pending_detections:
-                return
-            tock = _tick("4_upload_wait")
-            for row in pending_detections:
-                fut = row.pop("upload_future", None)
-                obj = row.pop("object_name", None)
-                if fut is not None:
-                    try:
-                        result = fut.result(timeout=10)
-                        row["image_path"] = result or ""
-                        # if result: print(f"📸 uploaded: {obj}")
-                    except Exception as e:
-                        row["image_path"] = ""
-                        print(f"❌ Upload error {obj}: {e}")
-            tock()
+        # Dedicated Async Queue for DB inserts to prevent ThreadPool starvation or blocking
+        db_queue = asyncio.Queue()
+        
+        async def _detection_inserter_task():
+            """Continuously consumes from the queue and inserts to DB in the background."""
+            db_thread = DatabaseService()
+            batch = []
+            
+            while True:
+                try:
+                    # Wait for items, or timeout to flush a partial batch
+                    row = await asyncio.wait_for(db_queue.get(), timeout=2.0)
+                    if row is None: # Sentinel to exit
+                        break
+                        
+                    # Resolve upload future if present
+                    fut = row.pop("upload_future", None)
+                    obj = row.pop("object_name", None)
+                    if fut is not None:
+                        try:
+                            # Use an executor to avoid blocking the insert loop too long
+                            loop = asyncio.get_running_loop()
+                            result = await loop.run_in_executor(None, fut.result, 10) # 10s timeout
+                            row["image_path"] = result or ""
+                        except Exception as e:
+                            row["image_path"] = ""
+                            print(f"❌ Upload error {obj}: {e}")
+                            
+                    batch.append(row)
+                    db_queue.task_done()
+                    
+                    # Flush batch if large enough
+                    if len(batch) >= 5:
+                        db_thread.insert_detections_batch(batch)
+                        batch.clear()
+                        
+                except asyncio.TimeoutError:
+                    # Flush partial batch on timeout if we have any
+                    if batch:
+                        db_thread.insert_detections_batch(batch)
+                        batch.clear()
+                except Exception as e:
+                    print(f"❌ Background DB Inserter Error: {e}")
+            
+            # Final flush on exit
+            if batch:
+                db_thread.insert_detections_batch(batch)
 
-            tock = _tick("5_db_batch_insert")
-            db.insert_detections_batch(pending_detections)
-            tock()
-            pending_detections.clear()
+        # Start the inserter task
+        inserter_task = asyncio.create_task(_detection_inserter_task())
 
         while capture_running:
             # ── Stop signal check ────────────────────────────────
@@ -147,106 +194,141 @@ async def process_video_task(
             if not ret:
                 break
                 
-            if frame is None or frame_count == last_processed_count:
-                await asyncio.sleep(0.01)
+            # Process frames at ~15 FPS for smooth tracking without overwhelming CPU
+            # (e.g. if source is 30fps, process every 2nd frame)
+            track_skip = max(1, int(fps / 15)) 
+            if frame is None or frame_count - last_processed_count < track_skip:
+                await asyncio.sleep(0.005)
                 continue
                 
             last_processed_count = frame_count
 
-            # Skip frames logic: we only run detection if the frame_count is roughly a multiple
-            # But since we might skip counts in the reader, we just run AI on whatever latest frame we got 
-            # if enough time or frames have passed. For simplicity, we just use modulo on the real count.
-            if frame_count % frame_skip != 0:
-                await asyncio.sleep(0.01)
-                continue
-
-            # ── 1. Detection ─────────────────────────────────────────
-            # Only run AI prediction if not paused and on correct frame skip
-            run_ai = not stream_manager.is_prediction_paused(camera_id) and (frame_count % frame_skip == 0)
+            # ── 1. Detection (Continuous Background Tracking) ───────────────────
+            run_ai = not stream_manager.is_prediction_paused(camera_id)
             
-            # Maintain the current boxes to draw on every frame
+            # Use previously calculated tracking data to draw
             current_boxes = getattr(process_video_task, f"_boxes_{camera_id}", [])
             current_labels = getattr(process_video_task, f"_labels_{camera_id}", [])
+            track_labels = getattr(process_video_task, f"_track_labels_{camera_id}", {})
             
             if run_ai:
-                tock = _tick("1_detect")
-                results = detector.track_people(frame)
-                tock()
-                
-                # Update boxes cache
-                new_boxes = []
-                new_labels = []
+                # Prevent piling up YOLO tasks if one is already running
+                is_inferring = getattr(process_video_task, f"_inferring_{camera_id}", False)
+                if not is_inferring:
+                    setattr(process_video_task, f"_inferring_{camera_id}", True)
+                    
+                    # Capture the frame and info asynchronously
+                    inference_frame = frame.copy()
+                    current_count = frame_count
+                    
+                    async def _run_tracking_and_classification():
+                        try:
+                            loop = asyncio.get_running_loop()
+                            
+                            tock = _tick("1_detect_async")
+                            # 1. Run YOLO Tracking (taking ~45ms on CPU)
+                            results = await loop.run_in_executor(None, detector.track_people, inference_frame)
+                            tock()
+                            
+                            new_boxes = []
+                            new_labels = []
+                            run_heavy_classifier = (current_count % frame_skip == 0)
+                            boxes_to_classify = []
 
-                if results and hasattr(results, 'boxes') and results.boxes is not None:
-                    for box in results.boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        person_crop = frame[y1:y2, x1:x2]
-                        if person_crop.size == 0: continue
+                            if results and hasattr(results, 'boxes') and results.boxes is not None:
+                                for box in results.boxes:
+                                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                    new_boxes.append((x1, y1, x2, y2))
+                                    
+                                    # Get tracking ID if available
+                                    track_id_obj = getattr(box, 'id', None)
+                                    person_id = int(track_id_obj[0]) if track_id_obj is not None else None
+                                    
+                                    # Use cached label or default
+                                    label = track_labels.get(person_id, "Person") if person_id else "Person"
+                                    new_labels.append(label)
+                                    
+                                    if run_heavy_classifier:
+                                        boxes_to_classify.append({
+                                            "coords": (x1, y1, x2, y2),
+                                            "person_id": person_id
+                                        })
 
-                        # ── 2. Classify ──────────────────────────────────
-                        tock = _tick("2_classify")
-                        clothing_type, confidence = classifier.predict(person_crop)
-                        tock()
-                        
-                        new_boxes.append((x1, y1, x2, y2))
-                        new_labels.append(f"{clothing_type} {confidence:.2f}")
+                            # Immediately update the shared boxes so the main stream can draw them on the NEXT frame
+                            setattr(process_video_task, f"_boxes_{camera_id}", new_boxes)
+                            setattr(process_video_task, f"_labels_{camera_id}", new_labels)
 
-                        # ── 3. Color analysis ────────────────────────────
-                        tock = _tick("3_color")
-                    category = "UNKNOWN"
-                    color_profile = {}
+                            # 2. Run Heavy Classification if scheduled
+                            if run_heavy_classifier and boxes_to_classify:
+                                for bdata in boxes_to_classify:
+                                    bx1, by1, bx2, by2 = bdata["coords"]
+                                    pid = bdata["person_id"]
+                                    person_crop = inference_frame[by1:by2, bx1:bx2]
+                                    if person_crop.size == 0: continue
 
-                    if clothing_type in ["Dress", "Robe"]:
-                        category = "FULL"
-                        color_profile = analyze_color_histogram(person_crop)
-                    elif clothing_type in ["Jeans", "Shorts", "Skirt"]:
-                        category = "BOTTOM"
-                        ph, pw, _ = person_crop.shape
-                        bottom_crop = person_crop[int(ph*0.50):int(ph*0.90), :]
-                        color_profile = analyze_color_histogram(bottom_crop)
-                    else:
-                        category = "TOP"
-                        ph, pw, _ = person_crop.shape
-                        top_crop = person_crop[int(ph*0.15):int(ph*0.50), :]
-                        color_profile = analyze_color_histogram(top_crop)
-                    tock()
+                                    tock = _tick("2_classify_async")
+                                    clothing_type, confidence = await loop.run_in_executor(
+                                        None, classifier.predict, person_crop
+                                    )
+                                    tock()
+                                    
+                                    if pid:
+                                        track_labels[pid] = f"{clothing_type} {confidence:.2f}"
+                                        setattr(process_video_task, f"_track_labels_{camera_id}", track_labels)
 
-                    video_time_offset = frame_count / fps
+                                    tock = _tick("3_color")
+                                    category = "UNKNOWN"
+                                    color_profile = {}
 
-                    # ── 4. Upload image (async non-blocking) ─────────
-                    upload_future = None
-                    object_name   = ""
-                    if storage is not None and person_crop is not None and person_crop.size != 0:
-                        tock = _tick("4_upload_submit")
-                        object_name = f"detections/{camera_id}/{video_id or 'no-video'}/{frame_count}_{uuid.uuid4().hex}.jpg"
-                        # ส่งงาน upload ไปรันใน thread pool โดยไม่รอผล
-                        crop_copy     = person_crop.copy()  # copy ก่อนส่ง thread เพื่อกัน race condition
-                        upload_future = _EXECUTOR.submit(storage.upload_image, crop_copy, object_name)
-                        tock()
+                                    if clothing_type in ["Dress", "Robe"]:
+                                        category = "FULL"
+                                        color_profile = analyze_color_histogram(person_crop)
+                                    elif clothing_type in ["Jeans", "Shorts", "Skirt"]:
+                                        category = "BOTTOM"
+                                        ph, pw, _ = person_crop.shape
+                                        bottom_crop = person_crop[int(ph*0.50):int(ph*0.90), :]
+                                        color_profile = analyze_color_histogram(bottom_crop)
+                                    else:
+                                        category = "TOP"
+                                        ph, pw, _ = person_crop.shape
+                                        top_crop = person_crop[int(ph*0.15):int(ph*0.50), :]
+                                        color_profile = analyze_color_histogram(top_crop)
+                                    tock()
 
-                    # ── 5. สะสม detection row (batch) ────────────────
-                    pending_detections.append({
-                        "track_id":          frame_count,
-                        "image_path":        "",          # จะ fill หลัง upload เสร็จ
-                        "object_name":       object_name,
-                        "upload_future":     upload_future,
-                        "category":          category,
-                        "class_name":        clothing_type,
-                        "color_profile":     color_profile,
-                        "video_time_offset": video_time_offset, 
-                        "camera_id":         camera_id,
-                        "video_id":          video_id,
-                    })
+                                    video_time_offset = current_count / fps
+                                    upload_future = None
+                                    object_name   = ""
+                                    
+                                    if storage is not None and person_crop.size != 0:
+                                        tock = _tick("4_upload_submit")
+                                        object_name = f"detections/{camera_id}/{video_id or 'no-video'}/{current_count}_{uuid.uuid4().hex}.jpg"
+                                        crop_copy = person_crop.copy()
+                                        upload_future = _EXECUTOR.submit(storage.upload_image, crop_copy, object_name)
+                                        tock()
 
-                    print(f"👤 Person detected - Clothing: {clothing_type} ({category}) (Conf: {confidence:.2f})")
+                                    db_queue.put_nowait({
+                                        "track_id":          current_count,
+                                        "image_path":        "",
+                                        "object_name":       object_name,
+                                        "upload_future":     upload_future,
+                                        "category":          category,
+                                        "class_name":        clothing_type,
+                                        "color_profile":     color_profile,
+                                        "video_time_offset": video_time_offset, 
+                                        "camera_id":         camera_id,
+                                        "video_id":          video_id,
+                                    })
 
-                # Flush pending detections to DB immediately if there are enough items
-                if len(pending_detections) >= 3:
-                    _flush_detections()
-
-                # Update the persistent tracking variables for this camera
-                setattr(process_video_task, f"_boxes_{camera_id}", new_boxes)
-                setattr(process_video_task, f"_labels_{camera_id}", new_labels)
+                                    print(f"👤 Person classified: {clothing_type} ({category}) (Conf: {confidence:.2f})")
+                                    
+                        except Exception as e:
+                            print(f"❌ AI pipeline error: {e}")
+                        finally:
+                            # Flag that we are ready to process a new AI frame
+                            setattr(process_video_task, f"_inferring_{camera_id}", False)
+                            
+                    # Fire and forget the AI cycle so the stream loop can immediately output the frame
+                    asyncio.create_task(_run_tracking_and_classification())
 
             # Draw bounding boxes from cache so they appear even on skipped frames
             # Draw on a copy if we want the raw frame for other things, but here modifying is fine
@@ -261,6 +343,20 @@ async def process_video_task(
                 scale = 720 / h
                 display_frame = cv2.resize(display_frame, (int(w * scale), 720))
 
+            # Calculate and draw debug FPS
+            now = time.time()
+            draw_fps = getattr(process_video_task, f"_fps_time_{camera_id}", now)
+            fps_val = 1.0 / (now - draw_fps) if now - draw_fps > 0 else 0
+            setattr(process_video_task, f"_fps_time_{camera_id}", now)
+            
+            # Smooth out FPS display
+            avg_fps = getattr(process_video_task, f"_fps_avg_{camera_id}", fps_val)
+            avg_fps = (avg_fps * 0.9) + (fps_val * 0.1)
+            setattr(process_video_task, f"_fps_avg_{camera_id}", avg_fps)
+            
+            debug_text = f"Target FPS: {fps:.1f} | Actual Process FPS: {avg_fps:.1f}"
+            cv2.putText(display_frame, debug_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
             # Encode and send to stream manager natively
             ret2, jpeg = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ret2:
@@ -269,7 +365,11 @@ async def process_video_task(
             await asyncio.sleep(0.01)
 
         # ── Flush any remaining detections at the end ────────────────
-        _flush_detections()
+        db_queue.put_nowait(None)
+        try:
+            await asyncio.wait_for(inserter_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            print(f"⚠️ [Timeout] Inserter task for camera {camera_id} taking too long to shutdown.")
 
         # ── Summary ──────────────────────────────────────────────────
         print(f"✅ [Done] Finished processing for {camera_id}")

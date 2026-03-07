@@ -147,8 +147,8 @@ def _extract_youtube_stream(url: str) -> dict:
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        # Allow best live stream formats or fall back to standard best
-        "format": "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best/best[ext=m3u8]",
+        # Avoid m3u8 if possible because OpenCV's libavformat doesn't like jumping between Google's adaptive hosts
+        "format": "best[ext=mp4]/best",
         "noplaylist": True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -182,22 +182,18 @@ def _extract_youtube_stream(url: str) -> dict:
 
 @router.post("/analyze/youtube")
 async def analyze_youtube(
-    background_tasks: BackgroundTasks,
     youtube_url: str = Form(...),
     camera_id: str = Form(...),
     label: Optional[str] = Form(None),
     frame_skip: int = Form(30),
 ):
-    """Download + analyse a YouTube video via yt-dlp."""
+    """Download + analyse a YouTube video via yt-dlp. (Registers ONLY)."""
     if not YOUTUBE_PATTERN.search(youtube_url):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-
-    stop_event = _register_stream(camera_id)  # raises 409 if duplicate
 
     try:
         info = _extract_youtube_stream(youtube_url)
     except Exception as e:
-        _unregister_stream(camera_id)          # release lock on yt-dlp error
         raise HTTPException(status_code=422, detail=f"yt-dlp error: {e}")
 
     # Register in DB
@@ -222,28 +218,14 @@ async def analyze_youtube(
     except Exception as e:
         print(f"Warning: Could not upsert camera to table: {e}")
 
-    async def _task():
-        try:
-            await process_video_task(
-                source=info["stream_url"],
-                camera_id=camera_id,
-                video_id=str(video_id) if video_id else None,
-                frame_skip=frame_skip,
-                stop_event=stop_event,
-            )
-        finally:
-            _unregister_stream(camera_id)
-
-    background_tasks.add_task(_task)
-
     return {
-        "status": "processing_started",
-        "message": "YouTube video queued for AI processing.",
+        "status": "queued",
+        "video_id": video_id,
         "camera_id": camera_id,
+        "source": info["stream_url"],
         "title": info["title"],
         "duration": info["duration"],
         "thumbnail": info["thumbnail"],
-        "video_id": str(video_id) if video_id else None,
     }
 
 # --- API endpoints สำหรับลบข้อมูล (สำหรับทดสอบ) ---

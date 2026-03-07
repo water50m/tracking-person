@@ -169,6 +169,10 @@ export default function EventFeed() {
 
   // ── Remove "isNew" flag after animation ──
   useEffect(() => {
+    // Performance fix: Prevent infinite mapping loop if there's nothing to update
+    const hasNew = events.some((e) => e.isNew);
+    if (!hasNew) return;
+
     const t = setTimeout(() => {
       setEvents((prev) =>
         prev.map((e) => (e.isNew ? { ...e, isNew: false } : e))

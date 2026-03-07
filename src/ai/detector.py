@@ -19,6 +19,8 @@ class PersonDetector:
             persist=True, 
             classes=[0], 
             verbose=False,
-            device=self.device # <--- เพิ่มตรงนี้
+            device=self.device,      # <--- เพิ่มตรงนี้
+            imgsz=320,               # <--- ลดขนาดภาพให้ AI คิดเร็วขึ้น 3-4 เท่า 
+            tracker="bytetrack.yaml" # <--- ใช้ Tracker แบบเบา (ไม่ต้องคำนวณ ReID)
         )
         return results[0]

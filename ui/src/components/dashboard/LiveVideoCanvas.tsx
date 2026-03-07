@@ -73,7 +73,7 @@ export default function LiveVideoCanvas() {
     fetchCameras();
     const t = setInterval(fetchCameras, 30000); // 30s refresh for camera list
     return () => clearInterval(t);
-  }, [selectedCamera]);
+  }, []);
 
   // Fetch latest detections for the selected camera
   useEffect(() => {

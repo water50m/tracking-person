@@ -126,7 +126,7 @@ async def _mjpeg_generator(source: str, camera_id: str) -> AsyncGenerator[bytes,
                     + frame_bytes
                     + b"\r\n"
                 )
-            await asyncio.sleep(1 / 30)
+            await asyncio.sleep(1 / 15)  # Yield loop heavily to prevent blocking
         return  # Exit when AI processing stops
                 
     # If not active, do not occupy the server. The frontend handles native playback.
@@ -150,6 +150,12 @@ async def mjpeg_stream(camera_id: str):
     return StreamingResponse(
         _mjpeg_generator(source, camera_id),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "close",
+        }
     )
 
 # ─── Prediction Controls ──────────────────────────────────────────────────────
@@ -203,10 +209,14 @@ async def start_prediction(camera_id: str, background_tasks: BackgroundTasks):
                 frame_skip=30,
                 stop_event=stop_event,
             )
+        except Exception as e:
+            print(f"❌ Camera {camera_id} background task error: {e}")
         finally:
             _unregister_stream(camera_id)
 
-    background_tasks.add_task(_task)
+    # Use asyncio.create_task instead of FastAPI BackgroundTasks to ensure 
+    # it runs fully concurrently and doesn't starve the Starlette worker pool
+    asyncio.create_task(_task())
     return {"status": "success", "camera_id": camera_id, "message": "Prediction started"}
 
 # ─── Live Data API (Optional) ─────────────────────────────────────────────────
