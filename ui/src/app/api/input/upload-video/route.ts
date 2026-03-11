@@ -83,6 +83,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         job_id: data.job_id,
+        video_id: data.video_id ?? null,
         status: data.status ?? "queued",
         camera_id: cameraId,
         filename: videoFile.name,

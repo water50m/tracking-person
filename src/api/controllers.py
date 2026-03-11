@@ -13,7 +13,7 @@ class DetectionController:
 
     def _get_select_columns(self):
         """ Helper เพื่อให้ SQL Select ข้อมูลลำดับเดียวกันเสมอ """
-        return "id, track_id, timestamp, image_path, clothing_category, class_name, color_profile, camera_id"
+        return "id, track_id, timestamp, image_path, clothing_category, class_name, color_profile, bbox, camera_id"
 
     def _map_to_schema(self, row) -> DetectionResponse:
         """ แปลงข้อมูลจาก DB Tuple -> Pydantic Model """
@@ -25,7 +25,8 @@ class DetectionController:
             category=str(row[4]) if row[4] else "UNKNOWN",
             class_name=str(row[5]) if row[5] else "unknown",
             color_profile=row[6] if row[6] else {},
-            camera_id=str(row[7]) if row[7] else "N/A"
+            bbox=row[7] if row[7] else None,
+            camera_id=str(row[8]) if row[8] else "N/A"
         )
 
     def get_all(self, limit: int, offset: int) -> List[DetectionResponse]:
@@ -315,9 +316,9 @@ class DetectionController:
         # Add additional fields
         return {
             **detection.__dict__,
-            "person_id": row[8] if len(row) > 8 else None,
-            "video_id": row[9] if len(row) > 9 else None,
-            "video_time_offset": row[10] if len(row) > 10 else None,
+            "person_id": row[9] if len(row) > 9 else None,
+            "video_id": row[10] if len(row) > 10 else None,
+            "video_time_offset": row[11] if len(row) > 11 else None,
         }
 
     def get_hourly_stats(self) -> List[DailyStats]:
@@ -336,6 +337,12 @@ class DetectionController:
         with self.db.conn.cursor() as cur:
             cur.execute(query)
             return [ClothingStats(label=r[0], count=r[1]) for r in cur.fetchall()]
+
+    def get_unique_persons_today(self) -> int:
+        query = "SELECT COUNT(DISTINCT track_id) FROM detections WHERE timestamp >= CURRENT_DATE"
+        with self.db.conn.cursor() as cur:
+            cur.execute(query)
+            return int(cur.fetchone()[0] or 0)
 
     def delete_detection(self, detection_id: str) -> bool: # ✅ แก้ Type เป็น str (UUID)
         """ ลบข้อมูลด้วย UUID string """

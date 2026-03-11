@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import HlsVideoPlayer from "./HlsVideoPlayer";
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -129,12 +131,12 @@ export default function LiveVideoCanvas() {
   };
 
   // Handle Start Prediction
-  const startPrediction = async () => {
+  const startPrediction = async (resume: boolean = false) => {
     if (!selectedCamera || selectedCamera.is_processing) return;
 
     setIsStartingAI(true);
     try {
-      const res = await fetch(`/api/dashboard/prediction/${selectedCamera.id}/start`, {
+      const res = await fetch(`/api/dashboard/prediction/${selectedCamera.id}/start?resume=${resume}`, {
         method: "POST"
       });
       if (res.ok) {
@@ -231,20 +233,34 @@ export default function LiveVideoCanvas() {
                 </button>
               </div>
             ) : (
-              <button
-                onClick={startPrediction}
-                disabled={isStartingAI}
-                className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-800 hover:bg-cyan-900/50 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-700 rounded transition-all disabled:opacity-50"
-              >
-                {isStartingAI ? (
-                  <div className="w-3 h-3 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
-                ) : (
-                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3">
-                    <path d="M8 5v14l11-7z" />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => startPrediction(false)}
+                  disabled={isStartingAI}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-cyan-900/60 hover:bg-cyan-800 text-cyan-50 border border-cyan-700/60 hover:border-cyan-500 rounded transition-all disabled:opacity-50 shadow-[0_0_10px_rgba(6,182,212,0.2)] font-bold tracking-wider"
+                  title="Start AI from current frame (Fresh Session)"
+                >
+                  {isStartingAI ? (
+                    <div className="w-3 h-3 border-2 border-cyan-100/30 border-t-cyan-50 rounded-full animate-spin" />
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3 h-3">
+                      <path d="M5 3l14 9-14 9V3z" />
+                    </svg>
+                  )}
+                  <span>START NEW</span>
+                </button>
+                <button
+                  onClick={() => startPrediction(true)}
+                  disabled={isStartingAI}
+                  className="flex items-center gap-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 hover:border-slate-500 rounded transition-all disabled:opacity-50"
+                  title="Resume AI from last paused frame (If available)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
+                    <path d="M12 2v20M17 5v14M7 5v14" />
                   </svg>
-                )}
-                <span>START AI</span>
-              </button>
+                  <span>RESUME</span>
+                </button>
+              </div>
             )}
           </span>
           <button
@@ -313,7 +329,11 @@ export default function LiveVideoCanvas() {
                   );
                 }
 
-                // Other source types fallback
+                // Other source types fallback (.m3u8 or .mp4)
+                if (selectedCamera.source_url.includes('.m3u8') || selectedCamera.source_url.includes('.mp4')) {
+                  return <HlsVideoPlayer src={selectedCamera.source_url} />;
+                }
+
                 return (
                   <div className="flex items-center justify-center w-full h-full bg-slate-900 flex-col gap-2">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-slate-700">
@@ -422,7 +442,7 @@ export default function LiveVideoCanvas() {
             <div className="flex items-center gap-1.5 mb-1">
               <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cam.is_active ? "bg-green-500" : "bg-red-600"}`} />
               <span className={`font-mono text-[9px] tracking-wider font-bold ${selectedCamera?.id === cam.id ? "text-cyan-400" : "text-slate-400"}`}>
-                {cam.id}
+                ID: {cam.id}
               </span>
             </div>
             <div className="flex items-center gap-2 justify-between w-full">

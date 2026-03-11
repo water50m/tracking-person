@@ -52,6 +52,7 @@ class DatabaseService:
                         clothing_category VARCHAR(50),
                         class_name VARCHAR(100),
                         color_profile JSONB,
+                        bbox JSONB,
                         camera_id VARCHAR(50)
                     );
                     CREATE INDEX IF NOT EXISTS idx_color_profile ON detections USING gin (color_profile);
@@ -62,6 +63,9 @@ class DatabaseService:
                         label VARCHAR(100),
                         filename VARCHAR(255),
                         file_path TEXT,
+                        width INT,
+                        height INT,
+                        last_processed_frame INT DEFAULT 0,
                         status VARCHAR(20) DEFAULT 'processing',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
@@ -71,6 +75,11 @@ class DatabaseService:
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_time_offset DOUBLE PRECISION;")
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_id TEXT;")
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS person_id UUID;")
+                cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS bbox JSONB;")
+                cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS bbox_image_path TEXT;")
+                cur.execute("ALTER TABLE processed_videos ADD COLUMN IF NOT EXISTS width INT;")
+                cur.execute("ALTER TABLE processed_videos ADD COLUMN IF NOT EXISTS height INT;")
+                cur.execute("ALTER TABLE processed_videos ADD COLUMN IF NOT EXISTS last_processed_frame INT DEFAULT 0;")
 
                 # Rename image_url -> image_path ถ้ายังใช้ชื่อเก่าอยู่
                 try:
@@ -99,18 +108,18 @@ class DatabaseService:
         except Exception as e:
             print(f"❌ Setup Tables Failed: {e}")
     
-    def register_video(self, camera_id: str, label: str, filename: str, file_path: str):
+    def register_video(self, camera_id: str, label: str, filename: str, file_path: str, width: int = None, height: int = None):
         """
         บันทึกข้อมูลวิดีโอเริ่มต้นลงในฐานข้อมูล และคืนค่า ID ของวิดีโอนั้นกลับมา
         """
         query = """
-            INSERT INTO processed_videos (camera_id, label, filename, file_path, status)
-            VALUES (%s, %s, %s, %s, 'processing')
+            INSERT INTO processed_videos (camera_id, label, filename, file_path, status, width, height)
+            VALUES (%s, %s, %s, %s, 'processing', %s, %s)
             RETURNING id;
         """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (camera_id, label, filename, file_path))
+                cur.execute(query, (camera_id, label, filename, file_path, width, height))
                 # ดึง ID ที่เพิ่งสร้างขึ้นมา
                 video_id = cur.fetchone()[0]
                 self.conn.commit()
@@ -130,6 +139,42 @@ class DatabaseService:
         except Exception as e:
             self.conn.rollback()
             print(f"❌ Error updating video status: {e}")
+
+    def update_video_progress(self, video_id: str, current_frame: int, status: str = 'paused'):
+        """อัปเดตสถานะและเฟรมล่าสุดที่ประมวลผลไป (สำหรับ Pause/Resume)"""
+        query = "UPDATE processed_videos SET last_processed_frame = %s, status = %s WHERE id = %s"
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (current_frame, status, video_id))
+                self.conn.commit()
+                print(f"⏸️ Video {video_id} paused at frame {current_frame}")
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ Error updating video progress: {e}")
+
+    def get_video_progress(self, video_id: str) -> int:
+        """ดึงเฟรมล่าสุดที่ประมวลผลไป เพื่อนำไป Resume"""
+        query = "SELECT last_processed_frame FROM processed_videos WHERE id = %s"
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (video_id,))
+                result = cur.fetchone()
+                return result[0] if result else 0
+        except Exception as e:
+            print(f"❌ Error getting video progress: {e}")
+            return 0
+
+    def get_latest_video_for_camera(self, camera_id: str):
+        """ดึง video_id ล่าสุดที่ผูกกับกล้องตัวนี้ เพื่อนำไปรัน AI ต่อ (Resume)"""
+        query = "SELECT id FROM processed_videos WHERE camera_id = %s ORDER BY created_at DESC LIMIT 1"
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (camera_id,))
+                result = cur.fetchone()
+                return str(result[0]) if result else None
+        except Exception as e:
+            print(f"❌ Error getting latest video for camera {camera_id}: {e}")
+            return None
 
     def _ensure_connection(self):
         """ตรวจสอบและเชื่อมต่อ database ใหม่ถ้าจำเป็น"""
@@ -160,10 +205,11 @@ class DatabaseService:
                 clothing_category,
                 class_name,
                 color_profile,
+                bbox,
                 image_path,
                 video_time_offset,
                 video_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             with self.conn.cursor() as cur:
@@ -174,6 +220,7 @@ class DatabaseService:
                     category,
                     class_name,
                     Json(color_profile if color_profile is not None else {}),
+                    Json(bbox) if locals().get('bbox') else None,
                     image_path,
                     video_time_offset,  # ส่งค่าวินาทีเข้าไป (ถ้าเป็น Live ส่ง None)
                     video_id,
@@ -204,7 +251,9 @@ class DatabaseService:
                 r.get("category"),
                 r["class_name"],
                 Json(r.get("color_profile") or {}),
+                Json(r.get("bbox")) if r.get("bbox") else None,
                 r.get("image_path", ""),
+                r.get("bbox_image_path", ""),
                 r.get("video_time_offset"),
                 r.get("video_id"),
             )
@@ -213,7 +262,7 @@ class DatabaseService:
         query = """
             INSERT INTO detections (
                 camera_id, track_id, person_id, clothing_category,
-                class_name, color_profile, image_path, video_time_offset, video_id
+                class_name, color_profile, bbox, image_path, bbox_image_path, video_time_offset, video_id
             ) VALUES %s
         """
         try:

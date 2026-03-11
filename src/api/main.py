@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi import UploadFile, File, Form
 from src.api.schemas import *
@@ -10,9 +11,36 @@ from src.api.routes.cameras_api import router as cameras_api_router
 from src.api.routes.relationships_api import router as relationships_api_router
 from src.api.routes.settings_api import router as settings_api_router
 from src.api.routes.dashboard_api import router as dashboard_api_router
+from src.services.database import DatabaseService
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run startup tasks then yield for normal operations."""
+    # ── Startup: revert any videos stuck in 'processing' to 'paused' ──────────
+    # This handles abrupt server restarts / crashes where the finally block
+    # in ai_processor.py never had a chance to run.
+    try:
+        db = DatabaseService()
+        with db.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE processed_videos SET status = 'paused' "
+                "WHERE status = 'processing'"
+            )
+            count = cur.rowcount
+        db.conn.commit()
+        if count > 0:
+            print(f"⚠️ [Startup] Marked {count} interrupted video(s) as 'paused' (server was likely restarted mid-process).")
+    except Exception as e:
+        print(f"⚠️ [Startup] Could not clean up stuck videos: {e}")
+
+    yield  # Application runs here
+    # (Add shutdown cleanup here if needed)
+
 
 controller = DetectionController()
-app = FastAPI(title="CCTV AI Analytics System")
+app = FastAPI(title="CCTV AI Analytics System", lifespan=lifespan)
+
 
 # Setup CORS (ให้ Next.js เรียกได้)
 app.add_middleware(
@@ -139,6 +167,10 @@ async def hourly_metrics():
 @app.get("/api/stats/clothing", response_model=List[ClothingStats])
 async def clothing_metrics():
     return controller.get_clothing_distribution()
+
+@app.get("/api/stats/unique-persons")
+async def unique_persons_metrics():
+    return {"count": controller.get_unique_persons_today()}
 
 # --- การจัดการข้อมูล ---
 @app.delete("/api/detections/{id}")

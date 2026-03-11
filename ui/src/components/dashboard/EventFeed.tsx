@@ -69,7 +69,7 @@ export default function EventFeed() {
         if (res.ok) {
           const data = await res.json();
           // sum total detections for today
-          const total = data.reduce((acc: number, cur: any) => acc + (cur.total_detections || 0), 0);
+          const total = data.reduce((acc: number, cur: any) => acc + (cur.count || 0), 0);
           setTotalToday(total);
         }
       } catch (e) {
@@ -108,7 +108,7 @@ export default function EventFeed() {
           camera_id: det.camera_id,
           timestamp: det.timestamp,
           clothing: det.class_name,
-          confidence: det.confidence || Math.random() * 0.3 + 0.6, // mock confidence if missing
+          confidence: det.confidence || 0.90, // mock confidence since backend does not persist it yet
           thumbnail_url: det.image_url ? det.image_url : `${MINIO_BASE}/${det.image_path}`,
           isNew: true
         }));

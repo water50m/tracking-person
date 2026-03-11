@@ -67,19 +67,42 @@ async def process_video_task(
         print("─" * 55 + "\n")
     # ────────────────────────────────────────────────────────────────
 
+    import re
+    import yt_dlp
+
     cap = None
     try:
         # 2. Open Video (รองรับทั้งไฟล์และ RTSP)
         # ถ้า source เป็นตัวเลข (เช่น "0") ให้แปลงเป็น int เพื่อเปิด Webcam
         video_source = int(source) if source.isdigit() else source
         
+        # If the source is a YouTube URL, extract the raw m3u8 stream on the fly
+        YOUTUBE_PATTERN = re.compile(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/')
+        if isinstance(video_source, str) and YOUTUBE_PATTERN.search(video_source):
+            try:
+                print(f"[AIProcessor] Resolving YouTube URL: {video_source}")
+                ydl_opts = {
+                    'format': 'best[ext=mp4]/best',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(video_source, download=False)
+                    video_source = info.get('url', video_source)
+                print(f"[AIProcessor] Successfully extracted raw stream URL")
+            except Exception as e:
+                print(f"❌ Error extracting YouTube stream for AI Processing: {e}")
+                if video_id:
+                    db.update_video_status(video_id, "failed")
+                return
+
         # เพิ่ม Options ให้ FFmpeg (OpenCV backend) ดึง m3u8 จาก YouTube ได้โดยไม่ตัด connection
         # ค่าถูกนำไปตั้งไว้ที่บรรทัดบนสุดของไฟล์แล้ว (OPENCV_FFMPEG_CAPTURE_OPTIONS)
         
         cap = cv2.VideoCapture(video_source)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         if not cap.isOpened():
-            print(f"❌ Error: Cannot open video source {source}")
+            print(f"❌ Error: Cannot open video source {source} (Resolved to: {video_source[:50]}...)")
             if video_id:
                 db.update_video_status(video_id, "failed")
             return
@@ -87,13 +110,25 @@ async def process_video_task(
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         frame_time = 1.0 / fps
 
+        # --- Resume Logic ---
+        start_frame = db.get_video_progress(video_id) if video_id else 0
+        
+        # Only try to seek if it's > 0 and not a pure Live stream (RTSP/Webcam usually fail silently on seek)
+        if start_frame > 0:
+            success = cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            if success:
+                print(f"▶️ Resuming video {video_id} from frame {start_frame}")
+            else:
+                print(f"⚠️ Could not seek to frame {start_frame}. Starting from beginning.")
+                start_frame = 0
+
         # 3. Dedicated thread to continuously read frames and prevent buffering lag
-        latest_frame_data = {"count": 0, "frame": None, "ret": True}
+        latest_frame_data = {"count": start_frame, "frame": None, "ret": True}
         frame_lock = threading.Lock()
         capture_running = True
 
         def _reader_thread():
-            count = 0
+            count = start_frame
             # Track start time to maintain absolute pacing
             stream_start_time = time.perf_counter()
             
@@ -113,7 +148,8 @@ async def process_video_task(
                 
                 # Pace the reader exactly to the stream's FPS to prevent 
                 # burst-reading from local files or network buffers like YouTube
-                expected_time = stream_start_time + (count * frame_time)
+                frames_processed_this_session = count - start_frame
+                expected_time = stream_start_time + (frames_processed_this_session * frame_time)
                 sleep_time = expected_time - time.perf_counter()
                 
                 if sleep_time > 0:
@@ -121,7 +157,7 @@ async def process_video_task(
                 # If we lag behind real-time by more than 1 second (e.g. network stall), 
                 # reset the baseline so it doesn't try to play catch up at 100x speed
                 elif sleep_time < -1.0:
-                    stream_start_time = time.perf_counter() - (count * frame_time)
+                    stream_start_time = time.perf_counter() - (frames_processed_this_session * frame_time)
 
         reader = threading.Thread(target=_reader_thread, daemon=True)
         reader.start()
@@ -156,6 +192,18 @@ async def process_video_task(
                         except Exception as e:
                             row["image_path"] = ""
                             print(f"❌ Upload error {obj}: {e}")
+                            
+                    # Resolve bbox upload future if present
+                    bbox_fut = row.pop("bbox_upload_future", None)
+                    bbox_obj = row.pop("bbox_object_name", None)
+                    if bbox_fut is not None:
+                        try:
+                            loop = asyncio.get_running_loop()
+                            bbox_result = await loop.run_in_executor(None, bbox_fut.result, 10) # 10s timeout
+                            row["bbox_image_path"] = bbox_result or ""
+                        except Exception as e:
+                            row["bbox_image_path"] = ""
+                            print(f"❌ Bbox upload error {bbox_obj}: {e}")
                             
                     batch.append(row)
                     db_queue.task_done()
@@ -202,6 +250,13 @@ async def process_video_task(
                 continue
                 
             last_processed_count = frame_count
+
+            # ── Periodic checkpoint: Save progress every 300 frames ─────────────
+            # This ensures that if the server crashes, the startup cleanup in
+            # main.py can mark this video as 'paused' with the correct frame
+            # number to resume from (rather than starting from 0 again).
+            if video_id and last_processed_count % 300 == 0 and last_processed_count > 0:
+                db.update_video_progress(video_id, last_processed_count, "processing")
 
             # ── 1. Detection (Continuous Background Tracking) ───────────────────
             run_ai = not stream_manager.is_prediction_paused(camera_id)
@@ -298,12 +353,24 @@ async def process_video_task(
                                     video_time_offset = current_count / fps
                                     upload_future = None
                                     object_name   = ""
+                                    bbox_object_name = ""
                                     
                                     if storage is not None and person_crop.size != 0:
                                         tock = _tick("4_upload_submit")
                                         object_name = f"detections/{camera_id}/{video_id or 'no-video'}/{current_count}_{uuid.uuid4().hex}.jpg"
                                         crop_copy = person_crop.copy()
                                         upload_future = _EXECUTOR.submit(storage.upload_image, crop_copy, object_name)
+                                        
+                                        # Also save the frame with bounding box drawn
+                                        bbox_frame = display_frame.copy()
+                                        # Draw the specific bounding box for this person
+                                        cv2.rectangle(bbox_frame, (bx1, by1), (bx2, by2), (0, 255, 255), 2)
+                                        label = track_labels.get(pid, f"{clothing_type} {confidence:.2f}")
+                                        cv2.putText(bbox_frame, label, (bx1, by1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                                        
+                                        bbox_object_name = f"detections/{camera_id}/{video_id or 'no-video'}/bbox_{current_count}_{uuid.uuid4().hex}.jpg"
+                                        bbox_copy = bbox_frame.copy()
+                                        bbox_upload_future = _EXECUTOR.submit(storage.upload_image, bbox_copy, bbox_object_name)
                                         tock()
 
                                     db_queue.put_nowait({
@@ -311,9 +378,13 @@ async def process_video_task(
                                         "image_path":        "",
                                         "object_name":       object_name,
                                         "upload_future":     upload_future,
+                                        "bbox_image_path":   "",
+                                        "bbox_object_name":  bbox_object_name,
+                                        "bbox_upload_future": bbox_upload_future if 'bbox_upload_future' in locals() else None,
                                         "category":          category,
                                         "class_name":        clothing_type,
                                         "color_profile":     color_profile,
+                                        "bbox":              [bx1, by1, bx2, by2],
                                         "video_time_offset": video_time_offset, 
                                         "camera_id":         camera_id,
                                         "video_id":          video_id,
@@ -372,10 +443,14 @@ async def process_video_task(
             print(f"⚠️ [Timeout] Inserter task for camera {camera_id} taking too long to shutdown.")
 
         # ── Summary ──────────────────────────────────────────────────
-        print(f"✅ [Done] Finished processing for {camera_id}")
         _print_timing_summary()
         if video_id:
-            db.update_video_status(video_id, "completed")
+            if stop_event is not None and stop_event.is_set():
+                print(f"⏸️ [Paused] Stopping processing for {camera_id} at frame {last_processed_count}")
+                db.update_video_progress(video_id, last_processed_count, "paused")
+            else:
+                print(f"✅ [Done] Finished processing for {camera_id}")
+                db.update_video_status(video_id, "completed")
 
     except Exception as e:
         print(f"❌ Error processing video for {camera_id}: {e}")

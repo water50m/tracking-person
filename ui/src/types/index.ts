@@ -156,6 +156,7 @@ export interface UploadJob {
   progress?: number;
   estimated_duration_sec?: number;
   error?: string;
+  video_id?: string;
 }
 
 export interface RTSPStream {

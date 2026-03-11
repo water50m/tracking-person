@@ -8,9 +8,11 @@ class DetectionBase(BaseModel):
     track_id: int
     timestamp: datetime
     image_url: Optional[str] = None
+    bbox_image_url: Optional[str] = None
     category: str  # TOP, BOTTOM, FULL
     class_name: str
     color_profile: Dict[str, float]
+    bbox: Optional[List[int]] = None
     camera_id: Optional[str] = None
 
 class DetectionResponse(DetectionBase):

@@ -189,7 +189,7 @@ export default function StatsWidget() {
     activeCameras: 0,
     totalCameras: 0,
     detPerHour: 0,
-    suspects: 0, // Mock for now until we have alerts
+    uniquePersons: 0,
   });
 
   // New state variables for the display values
@@ -220,8 +220,8 @@ export default function StatsWidget() {
           let totalDetectionsToday = 0;
           data.forEach((item: any) => {
             if (item.hour >= 0 && item.hour < 24) {
-              fullDay[item.hour].count = item.total_detections;
-              totalDetectionsToday += item.total_detections;
+              fullDay[item.hour].count = item.count || 0;
+              totalDetectionsToday += (item.count || 0);
             }
           });
 
@@ -235,8 +235,14 @@ export default function StatsWidget() {
             ...s,
             totalToday: totalDetectionsToday,
             detPerHour: currentHourDetections,
-            suspects: Math.floor(totalDetectionsToday * 0.15) // Mock high conf flags
           }));
+
+          // Fetch unique persons logic
+          const uniqueRes = await fetch("/api/stats/unique-persons");
+          if (uniqueRes.ok) {
+            const uniqueData = await uniqueRes.json();
+            setStats(s => ({ ...s, uniquePersons: uniqueData.count || 0 }));
+          }
         }
 
         // Fetch camera status
@@ -290,7 +296,7 @@ export default function StatsWidget() {
     {
       label: "ACTIVE CAMERAS",
       value: stats.activeCameras,
-      suffix: "/6",
+      suffix: `/${stats.totalCameras || 0}`,
       accent: "green",
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
@@ -310,13 +316,13 @@ export default function StatsWidget() {
       ),
     },
     {
-      label: "HIGH CONFIDENCE",
-      value: stats.suspects,
-      suffix: " FLAGS",
+      label: "UNIQUE PERSONS",
+      value: stats.uniquePersons,
+      suffix: " TODAY",
       accent: "pink",
       icon: (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
-          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01" />
+          <path d="M12 12a5 5 0 100-10 5 5 0 000 10zm-7 9a7 7 0 1114 0" />
         </svg>
       ),
     },

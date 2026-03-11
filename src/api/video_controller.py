@@ -76,7 +76,8 @@ async def upload_video(
     # Optional[str] หมายถึง "จะส่งมาหรือไม่ส่งก็ได้" (ไม่ได้บังคับ)
     # Form(None) คือค่าตั้งต้นจะเป็น None ถ้าหน้าบ้านไม่ได้ส่งค่านี้มา
     label: Optional[str] = Form(None),
-    frame_skip: int = Form(30, description="Process every N-th frame (default: 30)")
+    frame_skip: int = Form(5, description="Process every N-th frame (default: 5 = ~0.17s at 30fps)")
+
 ):
     try:
         
@@ -85,6 +86,12 @@ async def upload_video(
         
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+            
+        import cv2
+        cap = cv2.VideoCapture(file_path)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
         
         # 1.5 Register video in database
         db = DatabaseService()
@@ -92,7 +99,9 @@ async def upload_video(
             camera_id=camera_id,
             label=label or camera_id,
             filename=file.filename,
-            file_path=file_path
+            file_path=file_path,
+            width=width,
+            height=height
         )
         
         # 2. ส่งงานให้ ai_processor ทำต่อใน Background (โยนงานแล้วจบเลย)
@@ -187,42 +196,61 @@ async def analyze_youtube(
     label: Optional[str] = Form(None),
     frame_skip: int = Form(30),
 ):
-    """Download + analyse a YouTube video via yt-dlp. (Registers ONLY)."""
-    if not YOUTUBE_PATTERN.search(youtube_url):
-        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+    """Download + analyse a YouTube video via yt-dlp, or accept raw m3u8 stream. (Registers ONLY)."""
+    
+    is_raw_stream = ".m3u8" in youtube_url or ".mp4" in youtube_url
+    
+    if not is_raw_stream and not YOUTUBE_PATTERN.search(youtube_url):
+        raise HTTPException(status_code=400, detail="Invalid YouTube or Raw Stream URL")
 
     try:
-        info = _extract_youtube_stream(youtube_url)
+        if is_raw_stream:
+            info = {
+                "stream_url": youtube_url,
+                "title": f"Raw Stream {camera_id}",
+                "duration": None,
+                "thumbnail": None,
+                "uploader": "Unknown",
+            }
+        else:
+            info = _extract_youtube_stream(youtube_url)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"yt-dlp error: {e}")
 
-    # Register in DB
+    # Register the Camera first so we get the auto-generated integer ID
     db = DatabaseService()
+    generated_camera_id = None
+    try:
+        with db.conn.cursor() as cur:
+            # We treat the user's string input 'camera_id' as the human name, omit the id column
+            cur.execute("""
+                INSERT INTO cameras (name, source_url, is_active) 
+                VALUES (%s, %s, true)
+                RETURNING id
+            """, (camera_id, youtube_url))
+            generated_camera_id = cur.fetchone()[0]
+            db.conn.commit()
+    except Exception as e:
+        print(f"Warning: Could not insert camera to table: {e}")
+        # If it fails, we assume the user passed an existing INT id
+        try:
+            generated_camera_id = int(camera_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Could not create new camera and provided ID is not an integer.")
+
+    # Register the Video into the DB using the REAL integer id
     video_id = db.register_video(
-        camera_id=camera_id,
+        camera_id=str(generated_camera_id),
         label=label or info["title"],
         filename=info["title"],
         file_path=youtube_url,
     )
 
-    # Upsert into cameras table to make it visible on the dashboard
-    try:
-        with db.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO cameras (id, name, source_url, is_active) 
-                VALUES (%s, %s, %s, true)
-                ON CONFLICT (id) DO UPDATE 
-                SET name = EXCLUDED.name, source_url = EXCLUDED.source_url, is_active = true
-            """, (camera_id, label or info["title"], info["stream_url"]))
-            db.conn.commit()
-    except Exception as e:
-        print(f"Warning: Could not upsert camera to table: {e}")
-
     return {
         "status": "queued",
         "video_id": video_id,
-        "camera_id": camera_id,
-        "source": info["stream_url"],
+        "camera_id": str(generated_camera_id),
+        "source": youtube_url,
         "title": info["title"],
         "duration": info["duration"],
         "thumbnail": info["thumbnail"],
@@ -309,7 +337,7 @@ async def get_detections(
         db = DatabaseService()
         
         query = """
-            SELECT id, track_id, timestamp, image_path, clothing_category, 
+            SELECT id, track_id, timestamp, image_path, bbox_image_path, clothing_category, 
                    class_name, color_profile, camera_id, video_id::text
             FROM detections 
             WHERE 1=1
@@ -340,11 +368,12 @@ async def get_detections(
                     track_id=int(row[1]),
                     timestamp=row[2],
                     image_url=f"{minio_base}/{row[3]}" if row[3] else None,
-                    category=str(row[4]) if row[4] else "UNKNOWN",
-                    class_name=str(row[5]) if row[5] else "unknown",
-                    color_profile=row[6] if row[6] else {},
-                    camera_id=str(row[7]) if row[7] else "N/A",
-                    video_id=str(row[8]) if row[8] else None,
+                    bbox_image_url=f"{minio_base}/{row[4]}" if row[4] else None,
+                    category=str(row[5]) if row[5] else "UNKNOWN",
+                    class_name=str(row[6]) if row[6] else "unknown",
+                    color_profile=row[7] if row[7] else {},
+                    camera_id=str(row[8]) if row[8] else "N/A",
+                    video_id=str(row[9]) if row[9] else None,
                 ))
                 # Log the generated URL for debugging
             
@@ -449,3 +478,198 @@ async def stream_video_file(video_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+async def _review_mjpeg_generator(video_id: str, file_path: str):
+    import cv2
+    import numpy as np
+    
+    # 1. Fetch all detections for this video, ordered by time
+    db = DatabaseService()
+    print(f"[Review] Fetching detections for video_id={video_id!r}")
+    try:
+        with db.conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_time_offset, bbox, class_name, track_id FROM detections WHERE video_id = %s ORDER BY video_time_offset ASC",
+                (video_id,)
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        print(f"Error fetching detections for review: {e}")
+        rows = []
+    
+    print(f"[Review] Found {len(rows)} detection rows for video_id={video_id!r}")
+    
+    # Sample a few to see what's in them
+    for i, r in enumerate(rows[:3]):
+        print(f"[Review] Sample row {i}: time_offset={r[0]}, bbox={r[1]}, class={r[2]}")
+        
+    # Group detections by frame index (approximate, since we only have time_offset)
+    cap = cv2.VideoCapture(file_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        fps = 30.0
+
+    # Build a lookup dictionary: frame_index -> list of detections
+    detections_by_frame = {}
+    valid_count = 0
+    for r in rows:
+        time_offset = r[0]
+        bbox = r[1]
+        class_name = r[2]
+        track_id = r[3]
+        
+        if time_offset is None or bbox is None:
+            continue
+            
+        valid_count += 1
+        # Convert time offset to frame number
+        frame_idx = int(time_offset * fps)
+        
+        if frame_idx not in detections_by_frame:
+            detections_by_frame[frame_idx] = []
+            
+        detections_by_frame[frame_idx].append({
+            "bbox": bbox,
+            "class_name": class_name,
+            "track_id": track_id
+        })
+
+    print(f"[Review] Built {len(detections_by_frame)} frames with detections ({valid_count} valid bboxes)")
+
+
+
+    current_frame = 0
+    active_boxes = [] # (expiration_frame, bbox_data)
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Add new boxes for this frame
+        if current_frame in detections_by_frame:
+            for det in detections_by_frame[current_frame]:
+                # Keep box alive for 6 frames (approx 0.2 sec at 30fps) to reduce overlapping
+                active_boxes.append((current_frame + int(fps * 0.2), det))
+                
+        # Filter out expired boxes
+        active_boxes = [(exp, det) for exp, det in active_boxes if exp > current_frame]
+        
+        # Draw active boxes
+        for _, det in active_boxes:
+            bbox = det["bbox"]
+            if len(bbox) == 4:
+                x1, y1, x2, y2 = map(int, bbox)
+                label = f"{det['class_name']} ({det['track_id']})"
+                
+                # Draw rectangle and text
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # Encode and yield
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if ret:
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+            )
+            
+        current_frame += 1
+        
+        # Throttle to real time (approximate)
+        await asyncio.sleep(1.0 / fps)
+
+    cap.release()
+
+from fastapi.responses import StreamingResponse
+
+@router.get("/videos/{video_id}/review")
+async def review_video_stream(video_id: str):
+    """
+    Stream MJPEG of the video with bounding boxes drawn over it
+    """
+    db = DatabaseService()
+    query = "SELECT file_path FROM processed_videos WHERE id::text = %s"
+    with db.conn.cursor() as cur:
+        cur.execute(query, (video_id,))
+        result = cur.fetchone()
+        
+    if not result:
+        raise HTTPException(status_code=404, detail="Video not found")
+        
+    file_path = result[0]
+    
+    if not os.path.exists(file_path):
+        # Try resolving path if it moved
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        file_path = os.path.normpath(os.path.join(project_root, UPLOAD_DIR, os.path.basename(file_path)))
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Video file not found on disk")
+
+    return StreamingResponse(
+        _review_mjpeg_generator(video_id, file_path),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@router.post("/videos/{video_id}/pause")
+async def pause_video_processing(video_id: str):
+    """Pause an active processing task for a specific video id."""
+    db = DatabaseService()
+    with db.conn.cursor() as cur:
+        cur.execute("SELECT camera_id FROM processed_videos WHERE id::text = %s", (video_id,))
+        result = cur.fetchone()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Video not found")
+        
+    camera_id = result[0]
+    event = _ACTIVE_STREAMS.get(camera_id)
+    if event:
+        event.set()
+        await asyncio.sleep(0.5)
+        # Assuming the cleanup block handles status=paused
+    else:
+        # If the task isn't active in memory (e.g., server restarted), just update DB directly
+        db.update_video_progress(video_id, db.get_video_progress(video_id), "paused")
+        
+    return {"status": "success", "message": "Video processing paused"}
+
+@router.post("/videos/{video_id}/resume")
+async def resume_video_processing(video_id: str):
+    """Resume a paused processing task for a specific video id."""
+    db = DatabaseService()
+    with db.conn.cursor() as cur:
+        cur.execute("SELECT camera_id, file_path FROM processed_videos WHERE id::text = %s", (video_id,))
+        result = cur.fetchone()
+        
+    if not result:
+        raise HTTPException(status_code=404, detail="Video not found")
+        
+    camera_id, file_path = result
+    
+    if camera_id in _ACTIVE_STREAMS:
+        raise HTTPException(status_code=400, detail="A task is already running for this camera slot")
+        
+    stop_event = _register_stream(camera_id)
+    
+    async def _task():
+        try:
+            from src.services.ai_processor import process_video_task
+            await process_video_task(
+                source=file_path,
+                camera_id=camera_id,
+                video_id=video_id,
+                frame_skip=5,
+                stop_event=stop_event,
+            )
+        except Exception as e:
+            print(f"❌ Video {video_id} background task error: {e}")
+        finally:
+            _unregister_stream(camera_id)
+
+    asyncio.create_task(_task())
+    
+    # Immediately optimistically update status to 'processing'
+    db.update_video_status(video_id, "processing")
+    
+    return {"status": "success", "message": "Video processing resumed"}

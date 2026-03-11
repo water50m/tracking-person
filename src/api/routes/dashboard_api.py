@@ -179,7 +179,7 @@ async def stop_prediction(camera_id: str):
     return {"status": "success", "camera_id": camera_id, "message": "Prediction stopped"}
 
 @router.post("/prediction/{camera_id}/start")
-async def start_prediction(camera_id: str, background_tasks: BackgroundTasks):
+async def start_prediction(camera_id: str, background_tasks: BackgroundTasks, resume: bool = False):
     """Manually start AI processing for a camera that is currently inactive."""
     if camera_id in _ACTIVE_STREAMS:
         raise HTTPException(status_code=400, detail="Camera is already processing")
@@ -200,13 +200,19 @@ async def start_prediction(camera_id: str, background_tasks: BackgroundTasks):
 
     stop_event = _register_stream(camera_id)
     
+    # Fetch latest video ID to support resume if requested
+    video_id = None
+    if resume:
+        db = DatabaseService()
+        video_id = db.get_latest_video_for_camera(camera_id)
+    
     async def _task():
         try:
             await process_video_task(
                 source=stream_url,
                 camera_id=camera_id,
-                video_id=None,
-                frame_skip=30,
+                video_id=video_id,
+                frame_skip=5,
                 stop_event=stop_event,
             )
         except Exception as e:

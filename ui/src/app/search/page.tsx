@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Search, Video, Clock, Play, ArrowRight, ArrowLeft, Link2, Eye } from "lucide-react";
+import { Search, Video, Clock, Play, ArrowRight, ArrowLeft, Link2, Eye, BoxSelect, Pause, PlayCircle } from "lucide-react";
+import VideoReviewModal from "@/components/dashboard/VideoReviewModal";
 
 interface Detection {
   id: string;
   track_id: number;
   timestamp: string;
   image_url?: string;
+  bbox_image_url?: string;
   category: string;
   class_name: string;
   color_profile: Record<string, number>;
@@ -45,9 +47,16 @@ function StatusBadge({ status }: { status: string }) {
     );
   if (status === "processing")
     return (
-      <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-yellow-900/40 border border-yellow-800/50 text-yellow-400">
-        <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+      <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-cyan-900/40 border border-cyan-800/50 text-cyan-400">
+        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
         PROCESSING
+      </span>
+    );
+  if (status === "paused")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-yellow-900/40 border border-yellow-800/50 text-yellow-400">
+        <Pause className="w-3 h-3" />
+        PAUSED
       </span>
     );
   if (status === "error")
@@ -82,6 +91,7 @@ export default function SearchPage() {
   const [activeTab, setActiveTab] = useState<"detections" | "videos">("detections");
   const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
   const [videoTimeOffset, setVideoTimeOffset] = useState<string | null>(null);
+  const [reviewVideo, setReviewVideo] = useState<{ id: string; title: string } | null>(null);
 
   const [cameraRelationships, setCameraRelationships] = useState<CameraRelationship[]>([]);
   const [showRelationships, setShowRelationships] = useState(false);
@@ -128,6 +138,14 @@ export default function SearchPage() {
       setVideos([]);
     }
   };
+
+  // Poll for background AI processing status updates
+  useEffect(() => {
+    if (activeTab === "videos") {
+      const interval = setInterval(fetchVideos, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
 
   const fetchCameras = async () => {
     try {
@@ -356,9 +374,9 @@ export default function SearchPage() {
                     key={d.id}
                     className="bg-slate-900/50 border border-slate-800 rounded-lg p-3 hover:border-slate-600 transition-colors"
                   >
-                    {d.image_url ? (
+                    {d.bbox_image_url || d.image_url ? (
                       <img
-                        src={d.image_url}
+                        src={d.bbox_image_url || d.image_url}
                         alt={d.class_name}
                         className="w-full aspect-[2/3] object-cover object-top rounded mb-2"
                       />
@@ -370,9 +388,18 @@ export default function SearchPage() {
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-mono text-green-400">{d.camera_id}</span>
-                        <span className="text-xs text-slate-600">{d.category}</span>
                       </div>
                       <div className="font-semibold text-sm text-slate-200">{d.class_name}</div>
+                      <div className="text-xs space-y-1">
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-500 font-mono">1.</span>
+                          <span className="text-slate-400">{d.category}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-500 font-mono">2.</span>
+                          <span className="text-slate-400">{d.class_name}</span>
+                        </div>
+                      </div>
                       <div className="text-xs text-slate-500 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {new Date(d.timestamp).toLocaleString()}
@@ -433,12 +460,52 @@ export default function SearchPage() {
                         </button>
                       )}
 
+                      {/* Review Bbox Button */}
+                      {video.status === "completed" && (
+                        <button
+                          onClick={() => setReviewVideo({ id: video.id, title: video.filename })}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono rounded border border-cyan-800/60 text-cyan-400 bg-cyan-950/30 hover:bg-cyan-900/40 transition-colors"
+                          title="Review AI accuracy (draws bounding boxes)"
+                        >
+                          <BoxSelect className="w-3 h-3" />
+                          Review BBox
+                        </button>
+                      )}
+
+                      {/* Pause AI Processing Button */}
+                      {video.status === "processing" && (
+                        <button
+                          onClick={() => {
+                            fetch(`/api/video/videos/${video.id}/pause`, { method: "POST" }).then(fetchVideos);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono rounded border border-yellow-800/60 text-yellow-400 bg-yellow-950/30 hover:bg-yellow-900/40 transition-colors"
+                          title="Pause background AI processing"
+                        >
+                          <Pause className="w-3 h-3" />
+                          Pause AI
+                        </button>
+                      )}
+
+                      {/* Resume AI Processing Button */}
+                      {video.status === "paused" && (
+                        <button
+                          onClick={() => {
+                            fetch(`/api/video/videos/${video.id}/resume`, { method: "POST" }).then(fetchVideos);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono rounded border border-blue-800/60 text-blue-400 bg-blue-950/30 hover:bg-blue-900/40 transition-colors"
+                          title="Resume background AI processing"
+                        >
+                          <PlayCircle className="w-3 h-3" />
+                          Resume AI
+                        </button>
+                      )}
+
                       {/* Play button */}
                       {video.status === "completed" && (
                         <button
                           onClick={() => setPlayingVideoId(playingVideoId === video.id ? null : video.id)}
-                          className="p-2 bg-blue-600 hover:bg-blue-700 rounded text-white transition-colors"
-                          title={playingVideoId === video.id ? "Stop" : "Play"}
+                          className="p-2 bg-blue-600 hover:bg-blue-700 rounded text-white transition-colors ml-2"
+                          title={playingVideoId === video.id ? "Stop Video" : "Play Video"}
                         >
                           <Play className="w-4 h-4" />
                         </button>
@@ -472,6 +539,14 @@ export default function SearchPage() {
           </div>
         )}
       </div>
+
+      {reviewVideo && (
+        <VideoReviewModal
+          videoId={reviewVideo.id}
+          videoTitle={reviewVideo.title}
+          onClose={() => setReviewVideo(null)}
+        />
+      )}
     </div>
   );
 }
