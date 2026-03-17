@@ -53,5 +53,4 @@ next-env.d.ts
 
 
 # datasets
-original_datasets/
-processed_datasets/
+organized_dataset/
