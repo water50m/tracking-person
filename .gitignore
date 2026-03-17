@@ -50,3 +50,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+# datasets
+original_datasets/
+processed_datasets/
