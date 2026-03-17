@@ -13,6 +13,7 @@ class DetectionBase(BaseModel):
     class_name: str
     color_profile: Dict[str, float]
     bbox: Optional[List[int]] = None
+    bbox: Optional[List[int]] = None
     camera_id: Optional[str] = None
 
 class DetectionResponse(DetectionBase):

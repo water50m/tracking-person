@@ -15,6 +15,7 @@ import type {
   SearchResult,
   AttributeDetectionResult,
 } from "@/types";
+import { API } from "@/lib/api"; // FastAPI base URL จาก .env.local (NEXT_PUBLIC_API_URL)
 
 // ─── State ────────────────────────────────────────────────────
 
@@ -244,7 +245,8 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
 
     const fetchDetectionDetail = async () => {
       try {
-        const response = await fetch(`/api/detections/${encodeURIComponent(state.imageTarget!.id)}`);
+        // เรียก FastAPI โดยตรง — ดึง detection detail
+        const response = await fetch(`${API}/api/detections/${encodeURIComponent(state.imageTarget!.id)}`);
         if (!response.ok) {
           throw new Error("Failed to fetch detection details");
         }
@@ -269,7 +271,8 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
 
     try {
       const params = buildParams(state.filters, 1);
-      const res = await fetch(`/api/search/results?${params}`, {
+      // เรียก FastAPI /api/search/persons โดยตรง — ไม่ผ่าน Next.js transform layer
+      const res = await fetch(`${API}/api/search/persons?${params}`, {
         signal: controller.signal,
       });
       if (!res.ok) throw new Error("Search failed");
@@ -296,7 +299,8 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
 
     try {
       const params = buildParams(state.filters, state.page + 1);
-      const res = await fetch(`/api/search/results?${params}`);
+      // เรียก FastAPI โดยตรง
+      const res = await fetch(`${API}/api/search/persons?${params}`);
       if (!res.ok) throw new Error("Load more failed");
       const data = await res.json();
       dispatch({
@@ -351,7 +355,8 @@ export function InvestigationProvider({ children }: { children: React.ReactNode 
           },
           1
         );
-        fetch(`/api/search/results?${params}`)
+        // เรียก FastAPI โดยตรง — auto-search หลัง autofill
+        fetch(`${API}/api/search/persons?${params}`)
           .then((r) => r.json())
           .then((data) =>
             dispatch({

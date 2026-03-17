@@ -92,6 +92,12 @@ async def upload_video(
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
+            
+        import cv2
+        cap = cv2.VideoCapture(file_path)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
         
         # 1.5 Register video in database
         db = DatabaseService()
@@ -219,6 +225,26 @@ async def analyze_youtube(
 
     # Register the Camera first so we get the auto-generated integer ID
     db = DatabaseService()
+    generated_camera_id = None
+    try:
+        with db.conn.cursor() as cur:
+            # We treat the user's string input 'camera_id' as the human name, omit the id column
+            cur.execute("""
+                INSERT INTO cameras (name, source_url, is_active) 
+                VALUES (%s, %s, true)
+                RETURNING id
+            """, (camera_id, youtube_url))
+            generated_camera_id = cur.fetchone()[0]
+            db.conn.commit()
+    except Exception as e:
+        print(f"Warning: Could not insert camera to table: {e}")
+        # If it fails, we assume the user passed an existing INT id
+        try:
+            generated_camera_id = int(camera_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Could not create new camera and provided ID is not an integer.")
+
+    # Register the Video into the DB using the REAL integer id
     generated_camera_id = None
     try:
         with db.conn.cursor() as cur:
@@ -535,11 +561,35 @@ async def _review_mjpeg_generator(video_id: str, file_path: str):
         })
 
     print(f"[Review] Built {len(detections_by_frame)} frames with detections ({valid_count} valid bboxes)")
-
+    
+    # Debug: Show frames with multiple detections
+    multi_detection_frames = {k: v for k, v in detections_by_frame.items() if len(v) > 1}
+    if multi_detection_frames:
+        print(f"[Review] ⚠️  Found {len(multi_detection_frames)} frames with MULTIPLE detections:")
+        for frame_idx, dets in list(multi_detection_frames.items())[:5]:
+            det_info = [f"{d['track_id']}:{d['class_name']}" for d in dets]
+            print(f"  Frame {frame_idx}: {len(dets)} detections - {det_info}")
+    else:
+        print(f"[Review] ℹ️  No frames with multiple detections (all frames have 1 detection each)")
 
 
     current_frame = 0
-    active_boxes = [] # (expiration_frame, bbox_data)
+    active_boxes = [] # (expiration_frame, bbox_data, index_in_frame)
+    
+    # Track color mapping: track_id -> color (BGR tuple)
+    track_colors = {}
+    
+    # Predefined color palette for multiple people in same frame
+    color_palette = [
+        (255, 100, 100),  # Light Blue
+        (100, 255, 100),  # Light Green
+        (100, 100, 255),  # Light Red
+        (255, 255, 100),  # Light Cyan
+        (255, 100, 255),  # Light Magenta
+        (100, 255, 255),  # Light Yellow
+        (200, 150, 100),  # Light Purple
+        (100, 200, 150),  # Teal
+    ]
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -548,23 +598,80 @@ async def _review_mjpeg_generator(video_id: str, file_path: str):
             
         # Add new boxes for this frame
         if current_frame in detections_by_frame:
-            for det in detections_by_frame[current_frame]:
+            new_dets = detections_by_frame[current_frame]
+            if len(new_dets) > 1:
+                print(f"[Review] 📦 Frame {current_frame}: Adding {len(new_dets)} bboxes - {[d['class_name'] for d in new_dets]}")
+            for idx, det in enumerate(new_dets, start=1):
                 # Keep box alive for 6 frames (approx 0.2 sec at 30fps) to reduce overlapping
-                active_boxes.append((current_frame + int(fps * 0.2), det))
+                # Store the index (1-based) for this detection within its frame
+                active_boxes.append((current_frame + int(fps * 0.2), det, idx, len(new_dets)))
                 
         # Filter out expired boxes
-        active_boxes = [(exp, det) for exp, det in active_boxes if exp > current_frame]
+        active_boxes = [(exp, det, idx, total) for exp, det, idx, total in active_boxes if exp > current_frame]
+        
+        # Debug: Log when drawing multiple boxes
+        if len(active_boxes) > 1 and current_frame % 30 == 0:  # Log every 30 frames
+            print(f"[Review] 🎨 Frame {current_frame}: Drawing {len(active_boxes)} active bboxes")
+        
+        # Assign colors to track_ids that don't have one yet
+        current_track_ids = [det["track_id"] for _, det, _, _ in active_boxes]
+        for track_id in current_track_ids:
+            if track_id not in track_colors:
+                # Use palette color based on how many tracks we have
+                color_idx = len(track_colors) % len(color_palette)
+                track_colors[track_id] = color_palette[color_idx]
         
         # Draw active boxes
-        for _, det in active_boxes:
+        for _, det, idx_in_frame, total_in_frame in active_boxes:
             bbox = det["bbox"]
             if len(bbox) == 4:
                 x1, y1, x2, y2 = map(int, bbox)
-                label = f"{det['class_name']} ({det['track_id']})"
                 
-                # Draw rectangle and text
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                # Get consistent color for this track_id
+                track_id = det["track_id"]
+                color = track_colors.get(track_id, (255, 255, 255))
+                
+                # Draw rectangle around person
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                
+                # Use smaller font size (0.4 instead of 0.5)
+                font_scale = 0.4
+                font_thickness = 1
+                
+                # Create labels for 2 lines
+                label_line1 = f"1. ID:{track_id} {det['class_name']}"
+                
+                # Show "2." for first detection, or "2. result" if this is the second detection
+                if idx_in_frame == 1:
+                    label_line2 = "2."
+                elif idx_in_frame == 2:
+                    label_line2 = f"2. ID:{track_id} {det['class_name']}"
+                else:
+                    # For 3rd+ detection, show the full label
+                    label_line1 = f"{idx_in_frame}. ID:{track_id} {det['class_name']}"
+                    label_line2 = None
+                
+                # Calculate text dimensions for both lines
+                (text_width1, text_height1), baseline1 = cv2.getTextSize(label_line1, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+                
+                if idx_in_frame <= 2:
+                    (text_width2, text_height2), baseline2 = cv2.getTextSize(label_line2, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+                    
+                    # Position BELOW the top edge of bbox (inside the box)
+                    label_y_start = y1 + 2  # Start 2px below top edge
+                    
+                    # Draw line 1 (no background)
+                    cv2.putText(frame, label_line1, (x1 + 2, label_y_start + text_height1 + baseline1), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+                    # Draw line 2 (no background)
+                    cv2.putText(frame, label_line2, (x1 + 2, label_y_start + text_height1 + baseline1 + text_height2 + baseline2 + 4), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+                else:
+                    # For 3rd+ detection, just show single line (no background)
+                    label_y_start = y1 + 2
+                    
+                    cv2.putText(frame, label_line1, (x1 + 2, label_y_start + text_height1 + baseline1), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
 
         # Encode and yield
         ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -618,6 +725,61 @@ async def pause_video_processing(video_id: str):
     with db.conn.cursor() as cur:
         cur.execute("SELECT camera_id FROM processed_videos WHERE id::text = %s", (video_id,))
         result = cur.fetchone()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Video not found")
+        
+    camera_id = result[0]
+    event = _ACTIVE_STREAMS.get(camera_id)
+    if event:
+        event.set()
+        await asyncio.sleep(0.5)
+        # Assuming the cleanup block handles status=paused
+    else:
+        # If the task isn't active in memory (e.g., server restarted), just update DB directly
+        db.update_video_progress(video_id, db.get_video_progress(video_id), "paused")
+        
+    return {"status": "success", "message": "Video processing paused"}
+
+@router.post("/videos/{video_id}/resume")
+async def resume_video_processing(video_id: str):
+    """Resume a paused processing task for a specific video id."""
+    db = DatabaseService()
+    with db.conn.cursor() as cur:
+        cur.execute("SELECT camera_id, file_path FROM processed_videos WHERE id::text = %s", (video_id,))
+        result = cur.fetchone()
+        
+    if not result:
+        raise HTTPException(status_code=404, detail="Video not found")
+        
+    camera_id, file_path = result
+    
+    if camera_id in _ACTIVE_STREAMS:
+        raise HTTPException(status_code=400, detail="A task is already running for this camera slot")
+        
+    stop_event = _register_stream(camera_id)
+    
+    async def _task():
+        try:
+            from src.services.ai_processor import process_video_task
+            await process_video_task(
+                source=file_path,
+                camera_id=camera_id,
+                video_id=video_id,
+                frame_skip=5,
+                stop_event=stop_event,
+            )
+        except Exception as e:
+            print(f"❌ Video {video_id} background task error: {e}")
+        finally:
+            _unregister_stream(camera_id)
+
+    asyncio.create_task(_task())
+    
+    # Immediately optimistically update status to 'processing'
+    db.update_video_status(video_id, "processing")
+    
+    return {"status": "success", "message": "Video processing resumed"}
     
     if not result:
         raise HTTPException(status_code=404, detail="Video not found")

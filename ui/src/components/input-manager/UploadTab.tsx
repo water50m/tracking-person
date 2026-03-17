@@ -3,6 +3,7 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import type { UploadJob, JobStatus } from "@/types";
 import VideoReviewModal from "../dashboard/VideoReviewModal";
+import { API } from "@/lib/api"; // FastAPI base URL จาก .env.local (NEXT_PUBLIC_API_URL)
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -46,7 +47,8 @@ export default function UploadTab() {
   const [cameraSearch, setCameraSearch] = useState("");
 
   useEffect(() => {
-    fetch("/api/cameras")
+    // เรียก FastAPI โดยตรง — ไม่ผ่าน Next.js proxy (ลด latency)
+    fetch(`${API}/api/cameras`)
       .then((r) => r.json())
       .then((data: { cameras: Array<{ name: string }> }) => {
         if (Array.isArray(data.cameras)) {
@@ -558,7 +560,8 @@ async function simulateUpload(
   for (let i = 0; i < MAX_POLLS; i++) {
     await sleep(3000);
     try {
-      const res = await fetch("/api/video/videos");
+      // เรียก FastAPI โดยตรง — poll สถานะวิดีโอ
+      const res = await fetch(`${API}/api/video/videos`);
       if (!res.ok) continue;
       const videos: Array<{ id: string; status: string }> = await res.json();
       const video = videos.find((v) => String(v.id) === String(videoId));

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import VideoReviewModal from "../dashboard/VideoReviewModal";
+import { API } from "@/lib/api"; // FastAPI base URL จาก .env.local (NEXT_PUBLIC_API_URL)
 
 // ─── Types ────────────────────────────────────────────────────
 interface VideoInfo {
@@ -56,7 +57,8 @@ export default function YouTubeTab() {
 
     // Initial Fetch (Camera options list)
     useEffect(() => {
-        fetch("/api/cameras")
+        // เรียก FastAPI โดยตรง — ไม่ผ่าน Next.js proxy
+        fetch(`${API}/api/cameras`)
             .then((res) => res.json())
             .then((data: { cameras: Array<{ name: string }> }) => {
                 if (Array.isArray(data.cameras)) {

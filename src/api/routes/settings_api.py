@@ -7,6 +7,12 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+# ─── Cache CUDA info once at startup (torch init is slow) ─────
+_CUDA_AVAILABLE: bool = torch.cuda.is_available()
+_DEVICE_NAME: str    = torch.cuda.get_device_name(0) if _CUDA_AVAILABLE else "CPU"
+_GPU_COUNT: int      = torch.cuda.device_count()    if _CUDA_AVAILABLE else 0
+
+
 # Paths
 DEFAULTS_PATH = Path("config/default_settings.json")
 CONFIG_PATH = Path("config/system_settings.json")
@@ -63,9 +69,9 @@ async def get_settings():
     cfg = load_config()
     defaults = load_defaults()
 
-    cuda_available = torch.cuda.is_available()
-    device_name = torch.cuda.get_device_name(0) if cuda_available else "CPU"
-    gpu_count = torch.cuda.device_count() if cuda_available else 0
+    cuda_available = _CUDA_AVAILABLE
+    device_name    = _DEVICE_NAME
+    gpu_count      = _GPU_COUNT
 
     detector_path = Path(cfg["detector_model"])
     classifier_path = Path(cfg["classifier_model"])
@@ -147,12 +153,14 @@ async def reset_to_defaults(body: ResetRequest = ResetRequest()):
 async def list_models():
     """List all .pt model files in the root and models/ directory."""
     files = []
-    for d in [Path("."), MODELS_DIR]:
-        if d.exists():
+    search_dirs = [MODELS_DIR, Path(".")]  # models/ first, root as fallback
+    for d in search_dirs:
+        if d.exists() and d.is_dir():
+            # glob only the immediate directory (no recursive) for speed
             for f in d.glob("*.pt"):
                 files.append({
                     "name": f.name,
-                    "path": str(f),
+                    "path": str(f.resolve()),
                     "size_mb": round(f.stat().st_size / 1_048_576, 1),
                 })
     seen: set[str] = set()

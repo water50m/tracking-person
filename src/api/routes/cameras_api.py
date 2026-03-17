@@ -4,6 +4,10 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+# Singleton — สร้างครั้งเดียวตอน import (setup_tables รันแค่ครั้งเดียว)
+_db = DatabaseService()
+
+
 class CameraCreate(BaseModel):
     name: str
     source_url: str
@@ -23,7 +27,7 @@ class RelationshipCreate(BaseModel):
 async def get_all_cameras():
     """Get all cameras"""
     try:
-        db = DatabaseService()
+        db = _db
         
         query = "SELECT id, name, source_url, is_active FROM cameras ORDER BY id"
         
@@ -49,7 +53,7 @@ async def get_all_cameras():
 async def create_camera(camera: CameraCreate):
     """Create a new camera"""
     try:
-        db = DatabaseService()
+        db = _db
         
         query = """
             INSERT INTO cameras (name, source_url, is_active) 
@@ -76,7 +80,7 @@ async def create_camera(camera: CameraCreate):
 async def update_camera(camera_id: int, camera: CameraUpdate):
     """Update an existing camera"""
     try:
-        db = DatabaseService()
+        db = _db
         
         query = """
             UPDATE cameras 
@@ -110,7 +114,7 @@ async def update_camera(camera_id: int, camera: CameraUpdate):
 async def delete_camera(camera_id: int):
     """Delete a camera"""
     try:
-        db = DatabaseService()
+        db = _db
         
         # First delete related relationships
         with db.conn.cursor() as cur:

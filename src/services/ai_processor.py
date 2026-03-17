@@ -70,11 +70,34 @@ async def process_video_task(
     import re
     import yt_dlp
 
+    import re
+    import yt_dlp
+
     cap = None
     try:
         # 2. Open Video (รองรับทั้งไฟล์และ RTSP)
         # ถ้า source เป็นตัวเลข (เช่น "0") ให้แปลงเป็น int เพื่อเปิด Webcam
         video_source = int(source) if source.isdigit() else source
+        
+        # If the source is a YouTube URL, extract the raw m3u8 stream on the fly
+        YOUTUBE_PATTERN = re.compile(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/')
+        if isinstance(video_source, str) and YOUTUBE_PATTERN.search(video_source):
+            try:
+                print(f"[AIProcessor] Resolving YouTube URL: {video_source}")
+                ydl_opts = {
+                    'format': 'best[ext=mp4]/best',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(video_source, download=False)
+                    video_source = info.get('url', video_source)
+                print(f"[AIProcessor] Successfully extracted raw stream URL")
+            except Exception as e:
+                print(f"❌ Error extracting YouTube stream for AI Processing: {e}")
+                if video_id:
+                    db.update_video_status(video_id, "failed")
+                return
         
         # If the source is a YouTube URL, extract the raw m3u8 stream on the fly
         YOUTUBE_PATTERN = re.compile(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/')
@@ -109,6 +132,18 @@ async def process_video_task(
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         frame_time = 1.0 / fps
+
+        # --- Resume Logic ---
+        start_frame = db.get_video_progress(video_id) if video_id else 0
+        
+        # Only try to seek if it's > 0 and not a pure Live stream (RTSP/Webcam usually fail silently on seek)
+        if start_frame > 0:
+            success = cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            if success:
+                print(f"▶️ Resuming video {video_id} from frame {start_frame}")
+            else:
+                print(f"⚠️ Could not seek to frame {start_frame}. Starting from beginning.")
+                start_frame = 0
 
         # --- Resume Logic ---
         start_frame = db.get_video_progress(video_id) if video_id else 0
@@ -258,6 +293,13 @@ async def process_video_task(
             if video_id and last_processed_count % 300 == 0 and last_processed_count > 0:
                 db.update_video_progress(video_id, last_processed_count, "processing")
 
+            # ── Periodic checkpoint: Save progress every 300 frames ─────────────
+            # This ensures that if the server crashes, the startup cleanup in
+            # main.py can mark this video as 'paused' with the correct frame
+            # number to resume from (rather than starting from 0 again).
+            if video_id and last_processed_count % 300 == 0 and last_processed_count > 0:
+                db.update_video_progress(video_id, last_processed_count, "processing")
+
             # ── 1. Detection (Continuous Background Tracking) ───────────────────
             run_ai = not stream_manager.is_prediction_paused(camera_id)
             
@@ -385,6 +427,7 @@ async def process_video_task(
                                         "class_name":        clothing_type,
                                         "color_profile":     color_profile,
                                         "bbox":              [bx1, by1, bx2, by2],
+                                        "bbox":              [bx1, by1, bx2, by2],
                                         "video_time_offset": video_time_offset, 
                                         "camera_id":         camera_id,
                                         "video_id":          video_id,
@@ -445,6 +488,11 @@ async def process_video_task(
         # ── Summary ──────────────────────────────────────────────────
         _print_timing_summary()
         if video_id:
+            if stop_event is not None and stop_event.is_set():
+                print(f"⏸️ [Paused] Stopping processing for {camera_id} at frame {last_processed_count}")
+                db.update_video_progress(video_id, last_processed_count, "paused")
+            else:
+                print(f"✅ [Done] Finished processing for {camera_id}")
             if stop_event is not None and stop_event.is_set():
                 print(f"⏸️ [Paused] Stopping processing for {camera_id} at frame {last_processed_count}")
                 db.update_video_progress(video_id, last_processed_count, "paused")

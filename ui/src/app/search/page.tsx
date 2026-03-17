@@ -54,6 +54,13 @@ function StatusBadge({ status }: { status: string }) {
     );
   if (status === "paused")
     return (
+      <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-cyan-900/40 border border-cyan-800/50 text-cyan-400">
+        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+        PROCESSING
+      </span>
+    );
+  if (status === "paused")
+    return (
       <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-yellow-900/40 border border-yellow-800/50 text-yellow-400">
         <Pause className="w-3 h-3" />
         PAUSED
@@ -390,6 +397,16 @@ export default function SearchPage() {
                         <span className="text-xs font-mono text-green-400">{d.camera_id}</span>
                       </div>
                       <div className="font-semibold text-sm text-slate-200">{d.class_name}</div>
+                      <div className="text-xs space-y-1">
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-500 font-mono">1.</span>
+                          <span className="text-slate-400">{d.category}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-500 font-mono">2.</span>
+                          <span className="text-slate-400">{d.class_name}</span>
+                        </div>
+                      </div>
                       <div className="text-xs space-y-1">
                         <div className="flex items-center gap-1">
                           <span className="text-slate-500 font-mono">1.</span>

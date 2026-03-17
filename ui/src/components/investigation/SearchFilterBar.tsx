@@ -4,6 +4,7 @@ import React, { useCallback, useRef, useState, useEffect } from "react";
 import Image from "next/image";
 import { useInvestigation } from "./InvestigationContext";
 import type { ClothingClass, ClothingColor } from "@/types";
+import { API } from "@/lib/api"; // FastAPI base URL จาก .env.local (NEXT_PUBLIC_API_URL)
 
 interface CameraOption { id: string; name: string; }
 interface VideoOption { id: string; filename: string; camera_id: string; status: string; }
@@ -56,15 +57,16 @@ export default function SearchFilterBar() {
   const [allVideos, setAllVideos] = useState<VideoOption[]>([]);
 
   useEffect(() => {
-    // Fetch distinct camera_ids from detections (matches values used by search API)
-    fetch("/api/video/detections?limit=500")
+    // ดึง camera_ids ที่มีใน detections — เรียก FastAPI โดยตรง
+    fetch(`${API}/api/video/detections?limit=500`)
       .then((r) => r.json())
       .then((d: any[]) => {
         const ids = Array.from(new Set(d.map((x) => x.camera_id).filter(Boolean))) as string[];
         setCameras(ids.map((id) => ({ id, name: id })));
       })
       .catch(() => setCameras([]));
-    fetch("/api/video/videos")
+    // ดึงรายการวิดีโอ — เรียก FastAPI โดยตรง
+    fetch(`${API}/api/video/videos`)
       .then((r) => r.json())
       .then((d) => setAllVideos(Array.isArray(d) ? d : []))
       .catch(() => setAllVideos([]));

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import type { RTSPStream, RTSPTestResult } from "@/types";
+import { API } from "@/lib/api"; // FastAPI base URL จาก .env.local (NEXT_PUBLIC_API_URL)
 
 // ─── Mock seed streams ────────────────────────────────────────
 
@@ -52,7 +53,8 @@ export default function RTSPTab() {
   useEffect(() => {
     const poll = async () => {
       try {
-        const r = await fetch("/api/video/active-streams");
+        // เรียก FastAPI โดยตรง — ไม่ผ่าน Next.js proxy
+        const r = await fetch(`${API}/api/video/active-streams`);
         if (r.ok) { const d = await r.json(); setActiveStreams(d.active ?? []); }
       } catch { /* ignore */ }
     };
@@ -173,7 +175,8 @@ export default function RTSPTab() {
   const handleStop = async (camId: string) => {
     setStoppingCams((s) => new Set(s).add(camId));
     try {
-      await fetch(`/api/video/stop/${encodeURIComponent(camId)}`, { method: "POST" });
+      // เรียก FastAPI โดยตรง — stop AI processing
+      await fetch(`${API}/api/video/stop/${encodeURIComponent(camId)}`, { method: "POST" });
       setActiveStreams((prev) => prev.filter((id) => id !== camId));
     } catch { /* ignore */ }
     setStoppingCams((s) => { const n = new Set(s); n.delete(camId); return n; });

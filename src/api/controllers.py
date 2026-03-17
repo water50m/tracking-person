@@ -150,33 +150,16 @@ class DetectionController:
         # 🔥 ไฮไลท์: การจัดการ Class Logic (AND / OR)
         # -------------------------------------------------------
         if criteria.class_names and len(criteria.class_names) > 0:
-            color_conditions = []
-            for color in criteria.color_names:
-                # ✅ ใช้ criteria.color_threshold แทนเลขตายตัว
-                # ความหมาย: "ขอแค่มีสีนี้ผสมอยู่เกิน X% ก็เอามาเลย" (ไม่สนว่าจะมืดหรือสว่าง)
-                color_conditions.append(f"(color_profile->>%s)::float >= %s")
-                params.extend([color, criteria.color_threshold])
-            
-            joiner = " OR " if criteria.color_logic == "OR" else " AND "
-            query += f" AND ({joiner.join(color_conditions)})"
             if criteria.class_logic == "AND":
-                # ✅ กรณี AND: ใช้ท่า INTERSECT ที่คุณต้องการ
-                # เราจะหา track_id ที่มีครบทุก class ที่ระบุมา
-                
+                # กรณี AND: หา track_id ที่มีครบทุก class ด้วย INTERSECT
                 intersect_queries = []
                 for cls_name in criteria.class_names:
-                    # สร้าง Subquery สำหรับแต่ละ Class
                     intersect_queries.append("SELECT track_id FROM detections WHERE class_name = %s")
                     params.append(cls_name)
-                
-                # เอา Subquery มาเชื่อมกันด้วยคำว่า " INTERSECT "
                 full_intersect_sql = " INTERSECT ".join(intersect_queries)
-                
-                # เอาไปแปะใน WHERE track_id IN (...)
                 query += f" AND track_id IN ({full_intersect_sql})"
-
             else:
-                # ✅ กรณี OR: ใช้ท่า IN (...) แบบเดิม
+                # กรณี OR: ใช้ IN (...)
                 placeholders = ', '.join(['%s'] * len(criteria.class_names))
                 query += f" AND class_name IN ({placeholders})"
                 params.extend(criteria.class_names)
