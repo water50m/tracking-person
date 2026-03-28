@@ -246,6 +246,8 @@ class DetectionController:
                 f"SELECT {self._get_select_columns()} FROM detections WHERE track_id = %s ORDER BY timestamp ASC",
                 (track_id,),
             )
+            rows = cur.fetchall()
+
         if not rows:
             raise LookupError("Person not found")
 
@@ -266,6 +268,9 @@ class DetectionController:
                     "timestamp": det.timestamp.isoformat(),
                     "thumbnail_url": det.image_url,
                     "confidence": 0.9,
+                    "clothing_class": det.class_name,
+                    "color": det.category,
+                    "color_profile": det.color_profile,
                     "bounding_box": None,
                 }
             )

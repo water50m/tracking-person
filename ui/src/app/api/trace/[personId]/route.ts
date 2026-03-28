@@ -19,10 +19,19 @@ export async function GET(
   try {
     const backendUrl = process.env.AI_BACKEND_URL ?? "http://localhost:8000";
 
+    const controller = new AbortController();
+    const timeoutMs = 10000; // 10 วินาที (ปรับตามเครือข่าย/โหลด)
+    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
     const backendRes = await fetch(
       `${backendUrl}/api/persons/${encodeURIComponent(personId)}/trace`,
-      { next: { revalidate: 30 } }
+      {
+        signal: controller.signal,
+        next: { revalidate: 30 },
+      }
     );
+
+    clearTimeout(timeoutHandle);
 
     if (backendRes.status === 404) {
       return NextResponse.json(
@@ -54,6 +63,14 @@ export async function GET(
     });
   } catch (err) {
     console.error(`[trace/${personId}] Error:`, err);
+
+    if (err instanceof Error && err.name === "AbortError") {
+      return NextResponse.json(
+        { error: "Trace backend request timed out" },
+        { status: 504 }
+      );
+    }
+
     return NextResponse.json(
       { error: "Failed to fetch trace data" },
       { status: 500 }

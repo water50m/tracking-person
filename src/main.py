@@ -30,8 +30,8 @@ def bg_worker():
         track_id, person_img, top_crop, bottom_crop = task
         
         try:
-            # A. ทายประเภทชุด
-            cloth_class, conf = classifier.predict(person_img)
+            # A. ทายประเภทชุด และ bbox
+            cloth_class, conf, bbox = classifier.predict(person_img)
             
             # B. แยก Category และวิเคราะห์สี
             category = "UNKNOWN"
@@ -40,10 +40,20 @@ def bg_worker():
                 color_profile = analyze_color_histogram(person_img)
             elif cloth_class in ["Jeans", "Shorts", "Skirt"]:
                 category = "BOTTOM"
-                color_profile = analyze_color_histogram(bottom_crop)
+                if bbox:
+                    x1, y1, x2, y2 = bbox
+                    clothing_crop = person_img[y1:y2, x1:x2]
+                    color_profile = analyze_color_histogram(clothing_crop)
+                else:
+                    color_profile = analyze_color_histogram(bottom_crop)
             else:
                 category = "TOP"
-                color_profile = analyze_color_histogram(top_crop)
+                if bbox:
+                    x1, y1, x2, y2 = bbox
+                    clothing_crop = person_img[y1:y2, x1:x2]
+                    color_profile = analyze_color_histogram(clothing_crop)
+                else:
+                    color_profile = analyze_color_histogram(top_crop)
 
             # C. อัปโหลดรูปขึ้น MinIO
             timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")

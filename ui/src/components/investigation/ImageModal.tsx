@@ -11,6 +11,7 @@ export default function ImageModal() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [showVideo, setShowVideo] = useState(false);
+  const [showColorInfo, setShowColorInfo] = useState(false);
   
   // สร้าง State สำหรับเก็บค่า Time Offset ที่ผู้ใช้สามารถปรับเพิ่ม/ลดได้
   const [targetOffset, setTargetOffset] = useState<number>(0);
@@ -310,11 +311,68 @@ export default function ImageModal() {
               >
                 {showVideo ? 'OPEN IN SEARCH' : 'VIDEO'}
               </button>
+              <button
+                onClick={() => setShowColorInfo(true)}
+                className="w-full py-3 bg-slate-800/70 border border-cyan-600/80 rounded-sm
+                  font-mono text-sm font-bold tracking-widest text-cyan-300 hover:bg-cyan-900/30 transition-colors"
+              >
+                COLOR DETAILS
+              </button>
             </div>
           </div>
           
         </div>
       </div>
+
+      {showColorInfo && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-slate-900 border border-cyan-700/60 rounded-md p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-orbitron text-sm text-cyan-300 tracking-widest">COLOR INFORMATION</h3>
+                <p className="font-mono text-[10px] text-slate-500">Left object color data from detection.</p>
+              </div>
+              <button
+                onClick={() => setShowColorInfo(false)}
+                className="text-slate-400 hover:text-white"
+              >✕</button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="font-mono text-[10px] text-slate-400">Detected</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="p-2 bg-slate-800/50 border border-slate-700 rounded-sm">
+                  <div className="text-[11px] text-slate-500">Class</div>
+                  <div className="font-mono text-sm text-cyan-300 font-bold">{detectionDetail?.class_name || imageTarget.clothing_class || 'Unknown'}</div>
+                </div>
+                <div className="p-2 bg-slate-800/50 border border-slate-700 rounded-sm">
+                  <div className="text-[11px] text-slate-500">Color</div>
+                  <div className="font-mono text-sm text-purple-300 font-bold">{detectionDetail?.category || imageTarget.color || 'Unknown'}</div>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800">
+                <div className="font-mono text-[9px] text-slate-500 uppercase tracking-widest mb-1">Color Profile</div>
+                {detectionDetail?.color_profile ? (
+                  <div className="space-y-1">
+                    {Object.entries(detectionDetail.color_profile as Record<string, number>)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([color, value]) => (
+                        <div key={color} className="flex justify-between">
+                          <span className="font-mono text-[10px] uppercase text-slate-300">{color}</span>
+                          <span className="font-mono text-[10px] text-cyan-300">{(value as number).toFixed(1)}%</span>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <div className="font-mono text-[10px] text-slate-500">No color profile data available for this target.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

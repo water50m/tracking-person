@@ -40,11 +40,16 @@ export default function TraceModal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<TraceEvent | null>(null);
+  const [showColorDetails, setShowColorDetails] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
 
   // Fetch trace
   useEffect(() => {
-    if (!traceTarget) { setTraceData(null); return; }
+    if (!traceTarget) {
+      setTraceData(null);
+      setSelectedEvent(null);
+      return;
+    }
 
     setLoading(true);
     setError(false);
@@ -56,11 +61,14 @@ export default function TraceModal() {
         return r.json();
       })
       .then((data: TraceResponse) => {
-        setTraceData(data);
-        setSelectedEvent(data.detections[0] ?? null);
+        const detections = Array.isArray(data.detections) ? data.detections : [];
+        setTraceData({ ...data, detections });
+        setSelectedEvent(detections.length > 0 ? detections[0] : null);
       })
       .catch(() => {
         setError(true);
+        setTraceData(null);
+        setSelectedEvent(null);
       })
       .finally(() => setLoading(false));
   }, [traceTarget]);
@@ -132,6 +140,16 @@ export default function TraceModal() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setShowColorDetails(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-cyan-700/60
+                bg-cyan-950/30 font-mono text-[9px] text-cyan-300 hover:bg-cyan-900/40 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
+                <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4v6l4 2" />
+              </svg>
+              COLOR DETAILS
+            </button>
+            <button
               onClick={handleExport}
               disabled={!traceData}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-yellow-700/60
@@ -166,10 +184,13 @@ export default function TraceModal() {
               traceTarget={traceTarget}
               selectedEvent={selectedEvent}
               onSelectEvent={setSelectedEvent}
+              showColorDetails={showColorDetails}
+              onColorDetailsClose={() => setShowColorDetails(false)}
             />
           ) : null}
         </div>
       </div>
+
     </div>
   );
 }
@@ -181,19 +202,27 @@ function ModalBody({
   traceTarget,
   selectedEvent,
   onSelectEvent,
+  showColorDetails,
+  onColorDetailsClose,
 }: {
   trace: TraceResponse;
   traceTarget: SearchResult;
   selectedEvent: TraceEvent | null;
   onSelectEvent: (e: TraceEvent) => void;
+  showColorDetails: boolean;
+  onColorDetailsClose: () => void;
 }) {
+  const hasDetections = Array.isArray(trace.detections) && trace.detections.length > 0;
   const totalDuration =
-    trace.detections.length >= 2
+    hasDetections && trace.detections.length >= 2
       ? elapsed(
           trace.detections[0].timestamp,
           trace.detections[trace.detections.length - 1].timestamp
         )
       : null;
+
+  const firstDetection = hasDetections ? trace.detections[0] : null;
+  const lastDetection = hasDetections ? trace.detections[trace.detections.length - 1] : null;
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -282,126 +311,184 @@ function ModalBody({
         </div>
       </div>
 
-      {/* ── Right: Journey Timeline ── */}
-      <div className="flex-1 overflow-y-auto p-4 min-h-0">
-        <div className="font-mono text-[8px] text-slate-600 tracking-[0.2em] mb-4">
-          JOURNEY TIMELINE · {trace.detections.length} SIGHTINGS
-        </div>
+      {/* ── Right: Journey Timeline + Color Sidebar ── */}
+      <div className="flex-1 p-4 min-h-0 overflow-hidden">
+        <div className="flex gap-4 h-full min-h-0">
+          <div className="flex-1 overflow-y-auto">
+            <div className="font-mono text-[8px] text-slate-600 tracking-[0.2em] mb-4">
+              JOURNEY TIMELINE · {trace.detections.length} SIGHTINGS
+            </div>
 
-        {/* Vertical timeline */}
-        <div className="relative">
-          {/* Vertical line */}
-          <div className="absolute left-4 top-0 bottom-0 w-px bg-gradient-to-b from-pink-500/60 via-cyan-500/30 to-transparent" />
+            {/* Vertical timeline */}
+            <div className="relative">
+              {/* Vertical line */}
+              <div className="absolute left-4 top-0 bottom-0 w-px bg-gradient-to-b from-pink-500/60 via-cyan-500/30 to-transparent" />
 
-          <div className="space-y-1">
-            {trace.detections.map((det, i) => {
-              const accent = CAMERA_ACCENT[det.camera_id] ?? DEFAULT_ACCENT;
-              const isSelected = selectedEvent?.id === det.id;
-              const isFirst = i === 0;
-              const isLast = i === trace.detections.length - 1;
-              const { date, time } = formatFull(det.timestamp);
-              const gap =
-                i > 0
-                  ? elapsed(trace.detections[i - 1].timestamp, det.timestamp)
-                  : null;
+              {!hasDetections ? (
+                <div className="py-8 text-center text-slate-500 font-mono text-sm">No sightings available for this trace.</div>
+              ) : (
+                <div className="space-y-1">
+                  {trace.detections.map((det, i) => {
+                    const accent = CAMERA_ACCENT[det.camera_id] ?? DEFAULT_ACCENT;
+                    const isSelected = selectedEvent?.id === det.id;
+                    const isFirst = i === 0;
+                    const isLast = i === trace.detections.length - 1;
+                    const { date, time } = formatFull(det.timestamp);
+                    const gap = i > 0 ? elapsed(trace.detections[i - 1].timestamp, det.timestamp) : null;
 
-              return (
-                <div key={det.id}>
-                  {/* Gap indicator between stops */}
-                  {gap && (
-                    <div className="flex items-center gap-2 py-1 pl-12">
-                      <div className="flex-1 h-px border-t border-dashed border-slate-800" />
-                      <span className="font-mono text-[7px] text-slate-700 flex-shrink-0">
-                        +{gap}
-                      </span>
-                      <div className="flex-1 h-px border-t border-dashed border-slate-800" />
-                    </div>
-                  )}
-
-                  <button
-                    onClick={() => onSelectEvent(det)}
-                    className={`
-                      relative flex gap-3 items-start w-full text-left rounded-sm p-2 pl-10 transition-all duration-150
-                      ${isSelected
-                        ? `bg-slate-900/60 border border-slate-700/60`
-                        : "hover:bg-slate-900/30 border border-transparent"
-                      }
-                    `}
-                  >
-                    {/* Timeline dot */}
-                    <div
-                      className="absolute left-3 top-3.5 w-3 h-3 rounded-full border-2 flex-shrink-0 z-10"
-                      style={{
-                        background: isFirst || isLast ? accent.dot : "transparent",
-                        borderColor: accent.dot,
-                        boxShadow: isSelected ? `0 0 8px ${accent.dot}80` : "none",
-                      }}
-                    />
-
-                    {/* Thumbnail */}
-                    <div className="relative w-14 h-20 flex-shrink-0 rounded-sm overflow-hidden border border-slate-700/60">
-                      {det.thumbnail_url && (
-                        <Image
-                          src={det.thumbnail_url}
-                          alt={det.camera_name}
-                          fill
-                          className="object-cover opacity-80"
-                          unoptimized
-                        />
-                      )}
-                    </div>
-
-                    {/* Info */}
-                    <div className="flex-1 min-w-0 pt-0.5">
-                      <div className={`flex items-center gap-2 mb-1`}>
-                        {(isFirst || isLast) && (
-                          <span className={`font-mono text-[7px] px-1.5 py-0.5 rounded-sm border ${isFirst ? "border-green-800 text-green-500 bg-green-950/40" : "border-red-900 text-red-500 bg-red-950/40"}`}>
-                            {isFirst ? "ENTRY" : "LAST SEEN"}
-                          </span>
-                        )}
-                        <span className={`font-mono text-[9px] font-bold ${accent.text}`}>
-                          {det.camera_name}
-                        </span>
-                        <span className={`font-mono text-[7px] border px-1 rounded-sm ${accent.border} ${accent.text} opacity-60`}>
-                          {det.camera_id}
-                        </span>
-                      </div>
-
-                      <div className="font-mono text-[10px] text-slate-300 tabular-nums">{time}</div>
-                      <div className="font-mono text-[8px] text-slate-600">{date}</div>
-
-                      <div className="flex items-center gap-3 mt-1.5">
-                        <div className="font-mono text-[8px] text-slate-500">
-                          CONF <span className="text-cyan-400">{Math.round(det.confidence * 100)}%</span>
-                        </div>
-                        {det.bounding_box && (
-                          <div className="font-mono text-[7px] text-slate-700">
-                            BOX [{Math.round(det.bounding_box.x * 100)},{Math.round(det.bounding_box.y * 100)}]
+                    return (
+                      <div key={det.id}>
+                        {gap && (
+                          <div className="flex items-center gap-2 py-1 pl-12">
+                            <div className="flex-1 h-px border-t border-dashed border-slate-800" />
+                            <span className="font-mono text-[7px] text-slate-700 flex-shrink-0">+{gap}</span>
+                            <div className="flex-1 h-px border-t border-dashed border-slate-800" />
                           </div>
                         )}
-                      </div>
 
-                      {/* Mini confidence bar */}
-                      <div className="mt-1.5 h-0.5 bg-slate-800 rounded-full overflow-hidden w-24">
-                        <div
-                          className="h-full rounded-full transition-all"
-                          style={{
-                            width: `${det.confidence * 100}%`,
-                            background: det.confidence >= 0.9 ? "#39ff14" : det.confidence >= 0.75 ? "#00f5ff" : "#ffd700",
-                          }}
-                        />
+                        <button
+                          onClick={() => onSelectEvent(det)}
+                          className={`relative flex gap-3 items-start w-full text-left rounded-sm p-2 pl-10 transition-all duration-150 ${isSelected ? `bg-slate-900/60 border border-slate-700/60` : "hover:bg-slate-900/30 border border-transparent"}`}
+                        >
+                          <div className="absolute left-3 top-3.5 w-3 h-3 rounded-full border-2 flex-shrink-0 z-10" style={{ background: isFirst || isLast ? accent.dot : "transparent", borderColor: accent.dot, boxShadow: isSelected ? `0 0 8px ${accent.dot}80` : "none" }} />
+
+                          <div className="relative w-14 h-20 flex-shrink-0 rounded-sm overflow-hidden border border-slate-700/60">
+                            {det.thumbnail_url && (
+                              <Image src={det.thumbnail_url} alt={det.camera_name} fill className="object-cover opacity-80" unoptimized />
+                            )}
+                          </div>
+
+                          <div className="flex-1 min-w-0 pt-0.5">
+                            <div className="flex items-center gap-2 mb-1">
+                              {(isFirst || isLast) && (
+                                <span className={`font-mono text-[7px] px-1.5 py-0.5 rounded-sm border ${isFirst ? "border-green-800 text-green-500 bg-green-950/40" : "border-red-900 text-red-500 bg-red-950/40"}`}>
+                                  {isFirst ? "ENTRY" : "LAST SEEN"}
+                                </span>
+                              )}
+                              <span className={`font-mono text-[9px] font-bold ${accent.text}`}>{det.camera_name}</span>
+                              <span className={`font-mono text-[7px] border px-1 rounded-sm ${accent.border} ${accent.text} opacity-60`}>{det.camera_id}</span>
+                            </div>
+                            <div className="font-mono text-[10px] text-slate-300 tabular-nums">{time}</div>
+                            <div className="font-mono text-[8px] text-slate-600">{date}</div>
+                            <div className="flex items-center gap-3 mt-1.5">
+                              <div className="font-mono text-[8px] text-slate-500">CONF <span className="text-cyan-400">{Math.round(det.confidence * 100)}%</span></div>
+                              {det.bounding_box && <div className="font-mono text-[7px] text-slate-700">BOX [{Math.round(det.bounding_box.x * 100)},{Math.round(det.bounding_box.y * 100)}]</div>}
+                            </div>
+                            <div className="mt-1.5 h-0.5 bg-slate-800 rounded-full overflow-hidden w-24">
+                              <div className="h-full rounded-full transition-all" style={{ width: `${det.confidence * 100}%`, background: det.confidence >= 0.9 ? "#39ff14" : det.confidence >= 0.75 ? "#00f5ff" : "#ffd700" }} />
+                            </div>
+                          </div>
+                        </button>
                       </div>
-                    </div>
-                  </button>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              )}
+
+              <div className="mt-4 ml-10 flex items-center gap-3">
+                <div className="h-px flex-1 bg-gradient-to-r from-slate-700 to-transparent" />
+                <span className="font-mono text-[7px] text-slate-700 tracking-widest">END OF TRACE</span>
+              </div>
+            </div>
           </div>
 
-          {/* End of trace */}
-          <div className="mt-4 ml-10 flex items-center gap-3">
-            <div className="h-px flex-1 bg-gradient-to-r from-slate-700 to-transparent" />
-            <span className="font-mono text-[7px] text-slate-700 tracking-widest">END OF TRACE</span>
+          {showColorDetails && (
+            <div className="w-80 flex-shrink-0 border-l border-slate-800/60 pl-4">
+              <div className="p-3 bg-slate-900 rounded-sm border border-cyan-700/40 h-full overflow-y-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-orbitron text-xs text-cyan-300 tracking-widest">COLOR DETAILS</h3>
+                  <button onClick={() => onColorDetailsClose()} className="text-slate-400 hover:text-white text-xs">✕</button>
+                </div>
+                <div className="space-y-2">
+                  <div className="font-mono text-[9px] text-slate-400">Person:</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-2 bg-slate-800/50 border border-slate-700 rounded-sm">
+                      <div className="text-[11px] text-slate-500">Clothing</div>
+                      <div className="font-mono text-sm text-cyan-300 font-bold">{selectedEvent?.clothing_class || trace.attributes?.value || "Unknown"}</div>
+                    </div>
+                    <div className="p-2 bg-slate-800/50 border border-slate-700 rounded-sm">
+                      <div className="text-[11px] text-slate-500">Color</div>
+                      <div className="font-mono text-sm text-purple-300 font-bold">{selectedEvent?.color || traceTarget?.color || "Unknown"}</div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800">
+                    <div className="font-mono text-[8px] text-slate-500 uppercase tracking-widest mb-1">Color Profile</div>
+                    {selectedEvent?.color_profile ? (
+                      <div className="space-y-1">
+                        {Object.entries(selectedEvent.color_profile)
+                          .sort((a, b) => b[1] - a[1])
+                          .map(([color, pct]) => (
+                            <div key={color} className="flex justify-between items-center">
+                              <span className="font-mono text-[9px] text-slate-300 uppercase">{color}</span>
+                              <span className="font-mono text-[9px] text-cyan-300">{pct.toFixed(1)}%</span>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <div className="font-mono text-[9px] text-slate-400">No color profile available.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ColorDetailsModal({
+  traceData,
+  selectedEvent,
+  onClose,
+}: {
+  traceData: TraceResponse;
+  selectedEvent: TraceEvent | null;
+  onClose: () => void;
+}) {
+  const chartColors = selectedEvent?.color_profile ? selectedEvent.color_profile : null;
+
+  return (
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+      <div className="w-[min(512px,95vw)] bg-slate-900 border border-cyan-700/60 rounded-md p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="font-orbitron text-xs text-cyan-300 tracking-widest">COLOR INSPECT</h3>
+            <p className="font-mono text-[8px] text-slate-500">ID: {traceData.person_id}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-white text-sm"
+          >×</button>
+        </div>
+
+        <div className="space-y-2">
+          <div className="font-mono text-[9px] text-slate-400">Detected Person Color</div>
+          <div className="flex gap-2 flex-wrap">
+            <span className="px-2 py-1 rounded-sm border border-cyan-700 text-cyan-300 text-[10px]">{traceData.attributes?.color || traceData.cameras?.[0] || "N/A"}</span>
+            <span className="px-2 py-1 rounded-sm border border-pink-700 text-pink-300 text-[10px]">{selectedEvent?.color || traceData.detections[0]?.color || "Unknown"}</span>
+            <span className="px-2 py-1 rounded-sm border border-green-700 text-green-300 text-[10px]">{selectedEvent?.clothing_class || traceData.detections[0]?.clothing_class || "Unknown"}</span>
+          </div>
+
+          <div className="pt-2 border-t border-slate-800">
+            <div className="font-mono text-[8px] text-slate-500 uppercase tracking-widest mb-1">Color Profile (frame-level)</div>
+            {!chartColors && (
+              <div className="font-mono text-[9px] text-slate-400">No color profile available for selected frame.</div>
+            )}
+            {chartColors && (
+              <div className="space-y-1">
+                {Object.entries(chartColors)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([color, pct]) => (
+                    <div key={color} className="flex justify-between items-center">
+                      <span className="font-mono text-[9px] text-slate-300 uppercase">{color}</span>
+                      <span className="font-mono text-[9px] text-cyan-300">{pct.toFixed(1)}%</span>
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

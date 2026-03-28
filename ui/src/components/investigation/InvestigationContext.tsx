@@ -42,7 +42,7 @@ const INITIAL_FILTERS: SearchFilters = {
   clothing: [],
   colors: [],
   logic: "OR",
-  threshold: 0.65,
+  threshold: 0.1,
   camera_id: undefined,
   video_id: undefined,
   start_time: undefined,

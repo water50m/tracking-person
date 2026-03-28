@@ -83,6 +83,9 @@ export interface TraceEvent {
   timestamp: string;
   thumbnail_url: string | null;
   confidence: number;
+  clothing_class?: string;
+  color?: string;
+  color_profile?: Record<string, number>;
   bounding_box?: {
     x: number;
     y: number;
