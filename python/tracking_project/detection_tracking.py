@@ -11,6 +11,9 @@ from color_system import (
     get_primary_detailed_color, get_primary_color_group
 )
 from database import DatabaseService
+from reid_utils import (
+    calculate_similarity, match_lost_track, update_lost_tracks
+)
 
 def setup_device():
     """ตั้งค่า device สำหรับการประมวลผล"""
@@ -194,10 +197,16 @@ def main():
         print("   ระบบจะทำงานโดยไม่บันทึกลงฐานข้อมูล")
         db = None
     
+    # Hybrid Tracking System
+    id_mapping = {}  # {byte_id: our_id}
+    lost_tracks = {}  # {our_id: {features, last_seen}}
+    next_our_id = 1
+    
     # Memory system
     track_history = {}
     frame_count = 0
     
+    print("✅ Hybrid Tracking System enabled (ByteTrack + Re-ID)")
     print("กำลังประมวลผลวิดีโอ... กด 'q' เพื่อออก")
     
     while cap.isOpened():
@@ -206,27 +215,94 @@ def main():
             break
         
         frame_count += 1
-        current_ids = []
+        current_byte_ids = []
+        current_our_ids = []
         
-        # ตรวจจับคน
+        # ตรวจจับคนด้วย ByteTrack
         person_results = detect_persons(person_model, frame, device)
         
         if person_results[0].boxes.id is not None:
             boxes = person_results[0].boxes.xyxy.cpu().numpy().astype(int)
-            ids = person_results[0].boxes.id.cpu().numpy().astype(int)
+            byte_ids = person_results[0].boxes.id.cpu().numpy().astype(int)
             
-            for box, track_id in zip(boxes, ids):
-                current_ids.append(track_id)
-                process_single_person(
-                    person_model, custom_model, frame, box, track_id,
-                    track_history, frame_count, device, frame_width, frame_height, db
-                )
+            for box, byte_id in zip(boxes, byte_ids):
+                current_byte_ids.append(byte_id)
+                
+                # จำกัดกรอบไม่ให้เกินขอบภาพ
+                x1, y1, x2, y2 = box
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(frame_width, x2), min(frame_height, y2)
+                
+                # ครอปภาพคน
+                person_crop = frame[y1:y2, x1:x2]
+                
+                # ถ้าเป็น byte_id ใหม่ → พยายาม match กับ lost_tracks
+                if byte_id not in id_mapping:
+                    if person_crop.size > 0:
+                        # วิเคราะห์ features
+                        features = analyze_person_features(person_crop, custom_model, device)
+                        
+                        # พยายาม match กับ lost_tracks
+                        recovered_id = match_lost_track(features, lost_tracks, threshold=0.7)
+                        
+                        if recovered_id is not None:
+                            # Recover track
+                            id_mapping[byte_id] = recovered_id
+                            print(f"🔄 Track recovered: {recovered_id} (byte_id: {byte_id})")
+                            del lost_tracks[recovered_id]
+                        else:
+                            # สร้าง track ใหม่
+                            id_mapping[byte_id] = next_our_id
+                            next_our_id += 1
+                            print(f"🆕 New track: {id_mapping[byte_id]} (byte_id: {byte_id})")
+                else:
+                    # byte_id เดิม → วิเคราะห์ features ตามปกติ
+                    if person_crop.size > 0:
+                        features = analyze_person_features(person_crop, custom_model, device)
+                
+                # ใช้ our_id แทน byte_id
+                our_id = id_mapping[byte_id]
+                current_our_ids.append(our_id)
+                
+                # ประมวลผลตามปกติ
+                if person_crop.size > 0:
+                    # อัปเดตประวัติ
+                    update_track_history(track_history, our_id, features, frame_count)
+                    
+                    # บันทึกลงฐานข้อมูล
+                    if db is not None:
+                        try:
+                            db.insert_detection(
+                                camera_id="CAM-01",
+                                track_id=int(our_id),
+                                class_name="person",
+                                image_path="",
+                                category="person",
+                                detailed_colors=features["detailed_colors"],
+                                color_groups=features["color_groups"],
+                                primary_detailed_color=features["primary_detailed_color"],
+                                primary_color_group=features["primary_color_group"],
+                                clothes=features["clothes"],
+                                bbox=[int(x1), int(y1), int(x2), int(y2)]
+                            )
+                        except Exception as e:
+                            print(f"❌ Database save error for track {our_id}: {e}")
+                    
+                    # วาดผลลัพธ์
+                    draw_person_box(frame, (x1, y1, x2, y2), our_id, track_history)
+                    
+                    # วาดกรอบเสื้อผ้า
+                    clothes_results = custom_model(person_crop, device=device, verbose=False)
+                    draw_clothes_boxes(frame, (x1, y1, x2, y2), clothes_results, custom_model)
         
-        # ลบข้อมูลเก่า
-        cleanup_old_tracks(track_history, current_ids, frame_count)
+        # อัปเดต lost_tracks
+        update_lost_tracks(lost_tracks, track_history, current_our_ids, frame_count, timeout=60)
+        
+        # ลบข้อมูลเก่าจาก track_history
+        cleanup_old_tracks(track_history, current_our_ids, frame_count)
         
         # แสดงผล
-        cv2.imshow('Tracking with Attribute Memory', frame)
+        cv2.imshow('Hybrid Tracking (ByteTrack + Re-ID)', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
@@ -236,6 +312,11 @@ def main():
     # ปิด database connection
     if db is not None:
         db.close()
+    
+    print(f"\n📊 Tracking Summary:")
+    print(f"   Total tracks created: {next_our_id - 1}")
+    print(f"   Active tracks: {len(track_history)}")
+    print(f"   Lost tracks: {len(lost_tracks)}")
 
 if __name__ == "__main__":
     main()
