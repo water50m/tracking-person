@@ -180,8 +180,12 @@ def process_single_person(person_model, custom_model, frame, box, track_id,
         clothes_results = custom_model(person_crop, device=device, verbose=False)
         draw_clothes_boxes(frame, (x1, y1, x2, y2), clothes_results, custom_model)
 
-def main():
-    """ฟังก์ชันหลัก"""
+def main(enable_db=False):
+    """ฟังก์ชันหลัก
+    
+    Args:
+        enable_db: เปิด/ปิดการบันทึกลงฐานข้อมูล (default: False)
+    """
     # Setup
     device = setup_device()
     person_model, custom_model = load_models(device)
@@ -189,13 +193,17 @@ def main():
     cap, frame_width, frame_height = init_video_capture(video_path)
     
     # Database service
-    try:
-        db = DatabaseService()
-        print("✅ Database service initialized")
-    except Exception as e:
-        print(f"⚠️  Database service failed to initialize: {e}")
-        print("   ระบบจะทำงานโดยไม่บันทึกลงฐานข้อมูล")
+    if enable_db:
+        try:
+            db = DatabaseService()
+            print("✅ Database service initialized")
+        except Exception as e:
+            print(f"⚠️  Database service failed to initialize: {e}")
+            print("   ระบบจะทำงานโดยไม่บันทึกลงฐานข้อมูล")
+            db = None
+    else:
         db = None
+        print("ℹ️  Database save disabled (enable_db=False)")
     
     # Hybrid Tracking System
     id_mapping = {}  # {byte_id: our_id}
