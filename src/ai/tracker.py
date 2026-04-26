@@ -1,10 +1,35 @@
 """
 tracker.py — Unified Tracker Wrappers
-รองรับ 3 algorithm: DeepSORT | ByteTrack | BoT-SORT
+รองรับ 4 algorithms: DeepSORT | ByteTrack | BoT-SORT | BoxMOT
 
 Interface มาตรฐาน (ทุก class):
     tracker.update(frame, yolo_model, device, conf, classes)
     → list of {"track_id": int, "bbox": (x1,y1,x2,y2), "conf": float}
+
+👕 CLOTHING SELECTION FEATURE (BoxMOT เท่านั้น):
+    - สนับสนุนการเลือก tracking เฉพาะส่วนเสื้อผ้า (upper/lower body)
+    - clothing_mode: "full" (คนเต็ม), "upper" (เสื้อ/ช่วงบน), "lower" (กางเกง/ช่วงล่าง)
+    - ใช้ร่วมกับ person_crops parameter เพื่อแยกส่วนต่างๆ ของร่างกาย
+
+📝 ตัวอย่างการใช้งาน:
+    # 1. Full body tracking (default)
+    tracker = create_tracker("boxmot")
+    
+    # 2. Upper body tracking (เฉพาะเสื้อ)
+    tracker = create_tracker("boxmot", clothing_mode="upper")
+    
+    # 3. Lower body tracking (เฉพาะกางเกง)
+    tracker = create_tracker("boxmot", clothing_mode="lower")
+    
+    # 4. การใช้งานกับ person_crops
+    tracks = tracker.update(
+        frame=frame,
+        yolo_model=yolo_model,
+        device="cuda",
+        conf=0.5,
+        classes=[0],  # person class
+        person_crops=person_crops  # list of cropped person images
+    )
 """
 
 
@@ -124,21 +149,34 @@ class BotSortTracker:
 # ต้องติดตั้ง: pip install boxmot
 # ============================================================
 class BoxMotTracker:
-    def __init__(self, track_buffer: int = 90, match_thresh: float = 0.9, proximity_thresh: float = 0.6):
-        from boxmot import BoTSORT
+    def __init__(self, track_buffer: int = 90, match_thresh: float = 0.9, proximity_thresh: float = 0.6, clothing_mode: str = "full"):
+        from boxmot import BotSort
         from pathlib import Path
-        # กำหนด model_weights=Path('') เพื่อไม่โหลดโมเดล Re-ID ในตัว
-        self.tracker = BoTSORT(
-            model_weights=Path(''), 
-            device='cuda' if __import__('torch').cuda.is_available() else 'cpu',
+        import torch
+        
+        # Clothing selection mode: "full", "upper", "lower"
+        self.clothing_mode = clothing_mode.lower()
+        if self.clothing_mode not in ["full", "upper", "lower"]:
+            raise ValueError(f"Invalid clothing_mode '{clothing_mode}'. Use 'full', 'upper', or 'lower'")
+        
+        # ใช้โมเดล Re-ID ในตัวของ BoxMOT (osnet_x0_25_msmt17.pt เป็นค่าเริ่มต้น)
+        device = 'cuda' if torch.cuda.is_available() and torch.cuda.device_count() > 0 else 'cpu'
+        # BoxMOT expects GPU index like '0', not 'cuda'
+        boxmot_device = '0' if device == 'cuda' else device
+        self.tracker = BotSort(
+            model_weights=Path('osnet_x0_25_msmt17.pt'),
+            reid_weights=Path('osnet_x0_25_msmt17.pt'),
+            device=boxmot_device,
             fp16=False,
-            track_buffer=track_buffer,          # จำ ID ไว้แม้ว่าจะมองไม่เห็น 90 เฟรม
-            match_thresh=match_thresh,          # น้ำหนักรวมในการ Match สูงขึ้น 
-            proximity_thresh=proximity_thresh   # ให้น้ำหนัก Motion / IoU มากขึ้น เพื่อไม่ให้ขึ้นกับ ReID เพียงอย่างเดียว
+            half=False,
+            track_buffer=track_buffer,
+            match_thresh=match_thresh,
+            proximity_thresh=proximity_thresh
         )
 
-    def update(self, frame, yolo_model, device: str, conf: float, classes: list, embeds: list = None, boxes_list: list = None) -> list:
+    def update(self, frame, yolo_model, device: str, conf: float, classes: list, embeds: list = None, boxes_list: list = None, person_crops: list = None) -> list:
         import numpy as np
+        import cv2
         
         # ถ้าไม่มีการผ่าน boxes เข้ามา ให้ detect เอง
         if boxes_list is None:
@@ -162,9 +200,77 @@ class BoxMotTracker:
         if len(dets) == 0:
             return []
             
+        # Handle clothing selection mode
+        if self.clothing_mode != "full" and person_crops is not None:
+            # Process body part crops for upper/lower body tracking
+            processed_embeds = []
+            for i, person_crop in enumerate(person_crops):
+                if person_crop is None or person_crop.size == 0:
+                    processed_embeds.append(None)
+                    continue
+                    
+                # Split person crop into upper and lower body
+                ph, pw, _ = person_crop.shape
+                
+                if self.clothing_mode == "upper":
+                    # Upper body: 15% to 50% of person height
+                    body_crop = person_crop[int(ph*0.15):int(ph*0.50), :].copy()
+                elif self.clothing_mode == "lower":
+                    # Lower body: 50% to 90% of person height
+                    body_crop = person_crop[int(ph*0.50):int(ph*0.90), :].copy()
+                else:
+                    body_crop = person_crop
+                
+                # Use provided embedding if available, otherwise use None
+                if i < len(embeds) and embeds[i] is not None:
+                    processed_embeds.append(embeds[i])
+                else:
+                    processed_embeds.append(None)
+            
+            embeds = processed_embeds
+            
         embs_arr = None
         if embeds and len(embeds) == len(dets):
-            embs_arr = np.array(embeds)
+            # Filter out None embeddings to avoid numpy inhomogeneous shape error
+            valid_embeds = [e for e in embeds if e is not None]
+            if len(valid_embeds) == len(dets):
+                # Check for inhomogeneous shapes - all embeddings must have same dimension
+                shapes = [np.array(e).shape for e in valid_embeds]
+                if len(set(shapes)) == 1:
+                    # All same shape - safe to convert
+                    embs_arr = np.array(valid_embeds)
+                else:
+                    # Find most common shape and pad others
+                    from collections import Counter
+                    most_common_shape = Counter(shapes).most_common(1)[0][0]
+                    target_dim = most_common_shape[0] if most_common_shape else 128
+                    
+                    padded = []
+                    for e in embeds:
+                        if e is not None:
+                            e_arr = np.array(e)
+                            if e_arr.shape[0] != target_dim:
+                                if e_arr.shape[0] < target_dim:
+                                    # Pad with zeros
+                                    e_arr = np.pad(e_arr, (0, target_dim - e_arr.shape[0]), mode='constant')
+                                else:
+                                    # Truncate
+                                    e_arr = e_arr[:target_dim]
+                            padded.append(e_arr)
+                        else:
+                            padded.append(np.zeros(target_dim, dtype=np.float32))
+                    embs_arr = np.array(padded)
+            elif valid_embeds:
+                # Some embeddings are None - pad them
+                shapes = [np.array(e).shape for e in valid_embeds]
+                embed_dim = shapes[0][0] if shapes else 128
+                padded = []
+                for e in embeds:
+                    if e is not None:
+                        padded.append(np.array(e))
+                    else:
+                        padded.append(np.zeros(embed_dim, dtype=np.float32))
+                embs_arr = np.array(padded)
             
         # BoxMot signature: update(dets: ndarray, img: ndarray, embs: ndarray = None)
         # return: ndarray [x1, y1, x2, y2, track_id, conf, cls, ind]
@@ -180,6 +286,7 @@ class BoxMotTracker:
                 "track_id": int(t[4]),
                 "bbox": (int(t[0]), int(t[1]), int(t[2]), int(t[3])),
                 "conf": float(t[5]) if len(t) > 5 else 1.0,
+                "clothing_mode": self.clothing_mode,  # Add mode info to output
             })
         return out
 
@@ -199,12 +306,25 @@ def create_tracker(name: str = "deepsort", **kwargs):
     สร้าง tracker จากชื่อ
     Args:
         name: "deepsort" | "bytetrack" | "botsort" | "boxmot"
-        **kwargs: ส่งต่อเฉพาะ DeepSortTracker (max_age, n_init, max_iou_distance)
+        **kwargs: 
+            - สำหรับ DeepSortTracker: max_age, n_init, max_iou_distance
+            - สำหรับ BoxMotTracker: track_buffer, match_thresh, proximity_thresh, clothing_mode
     """
     name = name.lower()
     if name not in TRACKERS:
         raise ValueError(f"Unknown tracker '{name}'. Choose from: {list(TRACKERS.keys())}")
     cls = TRACKERS[name]
+    
     if name == "deepsort":
         return cls(**kwargs)
-    return cls()
+    elif name == "boxmot":
+        # Extract BoxMot-specific parameters
+        boxmot_kwargs = {
+            'track_buffer': kwargs.get('track_buffer', 90),
+            'match_thresh': kwargs.get('match_thresh', 0.9),
+            'proximity_thresh': kwargs.get('proximity_thresh', 0.6),
+            'clothing_mode': kwargs.get('clothing_mode', 'full')
+        }
+        return cls(**boxmot_kwargs)
+    else:
+        return cls()

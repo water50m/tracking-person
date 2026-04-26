@@ -54,3 +54,6 @@ next-env.d.ts
 
 # datasets
 organized_dataset/
+other/
+tracked_results/
+debug_frames/
