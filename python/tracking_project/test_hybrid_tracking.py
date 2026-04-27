@@ -8,7 +8,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'ai'))
 from reid_utils import (
     compare_color_distributions, compare_clothes_lists,
-    calculate_similarity, match_lost_track, update_lost_tracks
+    calculate_similarity, match_lost_track, update_lost_tracks,
+    compare_embeddings
 )
 
 
@@ -72,15 +73,45 @@ class TestSimilarityCalculation(unittest.TestCase):
         """ทดสอบการคำนวณ similarity แบบรวม"""
         features1 = {
             "detailed_colors": {"red": 50.0, "blue": 30.0, "black": 20.0},
-            "clothes": ["t-shirt", "jeans"]
+            "clothes": ["t-shirt", "jeans"],
+            "embedding": None
         }
         features2 = {
             "detailed_colors": {"red": 50.0, "blue": 30.0, "black": 20.0},
-            "clothes": ["t-shirt", "jeans"]
+            "clothes": ["t-shirt", "jeans"],
+            "embedding": None
         }
         similarity = calculate_similarity(features1, features2)
         self.assertGreater(similarity, 0.8)
         print(f"✅ Combined similarity: {similarity}")
+
+    def test_compare_embeddings_identical(self):
+        """ทดสอบการเปรียบเทียบ embeddings ที่เหมือนกัน"""
+        import numpy as np
+        embedding1 = np.ones(768) / np.sqrt(768)
+        embedding2 = np.ones(768) / np.sqrt(768)
+        similarity = compare_embeddings(embedding1, embedding2)
+        self.assertAlmostEqual(similarity, 1.0, places=2)
+        print(f"✅ Identical embeddings: similarity = {similarity}")
+
+    def test_compare_embeddings_different(self):
+        """ทดสอบการเปรียบเทียบ embeddings ที่ต่างกัน"""
+        import numpy as np
+        embedding1 = np.ones(768)
+        embedding1[:384] = 0
+        embedding1 = embedding1 / np.linalg.norm(embedding1)
+        embedding2 = np.zeros(768)
+        embedding2[384:] = 1
+        embedding2 = embedding2 / np.linalg.norm(embedding2)
+        similarity = compare_embeddings(embedding1, embedding2)
+        self.assertLess(similarity, 0.1)
+        print(f"✅ Different embeddings: similarity = {similarity}")
+
+    def test_compare_embeddings_none(self):
+        """ทดสอบการเปรียบเทียบ embeddings ที่เป็น None"""
+        similarity = compare_embeddings(None, None)
+        self.assertEqual(similarity, 0.0)
+        print(f"✅ None embeddings: similarity = {similarity}")
 
 
 class TestLostTrackMatching(unittest.TestCase):
@@ -90,13 +121,15 @@ class TestLostTrackMatching(unittest.TestCase):
         """ทดสอบการ match lost track ที่สมบูรณ์"""
         new_features = {
             "detailed_colors": {"red": 50.0, "blue": 30.0, "black": 20.0},
-            "clothes": ["t-shirt", "jeans"]
+            "clothes": ["t-shirt", "jeans"],
+            "embedding": None
         }
         lost_tracks = {
             1: {
                 "features": {
                     "detailed_colors": {"red": 50.0, "blue": 30.0, "black": 20.0},
-                    "clothes": ["t-shirt", "jeans"]
+                    "clothes": ["t-shirt", "jeans"],
+                    "embedding": None
                 },
                 "last_seen": 10
             }
@@ -109,13 +142,15 @@ class TestLostTrackMatching(unittest.TestCase):
         """ทดสอบการ match lost track ที่ไม่มี"""
         new_features = {
             "detailed_colors": {"red": 100.0},
-            "clothes": ["dress"]
+            "clothes": ["dress"],
+            "embedding": None
         }
         lost_tracks = {
             1: {
                 "features": {
                     "detailed_colors": {"blue": 100.0},
-                    "clothes": ["t-shirt"]
+                    "clothes": ["t-shirt"],
+                    "embedding": None
                 },
                 "last_seen": 10
             }
@@ -128,13 +163,15 @@ class TestLostTrackMatching(unittest.TestCase):
         """ทดสอบการ match lost track ที่ similarity ต่ำกว่า threshold"""
         new_features = {
             "detailed_colors": {"red": 60.0, "blue": 40.0},
-            "clothes": ["t-shirt"]
+            "clothes": ["t-shirt"],
+            "embedding": None
         }
         lost_tracks = {
             1: {
                 "features": {
                     "detailed_colors": {"red": 40.0, "blue": 60.0},
-                    "clothes": ["jeans"]
+                    "clothes": ["jeans"],
+                    "embedding": None
                 },
                 "last_seen": 10
             }
@@ -147,7 +184,8 @@ class TestLostTrackMatching(unittest.TestCase):
         """ทดสอบการ match lost track เมื่อ lost_tracks ว่าง"""
         new_features = {
             "detailed_colors": {"red": 50.0},
-            "clothes": ["t-shirt"]
+            "clothes": ["t-shirt"],
+            "embedding": None
         }
         matched_id = match_lost_track(new_features, {}, threshold=0.7)
         self.assertIsNone(matched_id)
@@ -175,7 +213,7 @@ class TestLostTrackMatching(unittest.TestCase):
         """ทดสอบการลบ track เมื่อกลับมาปรากฏ"""
         lost_tracks = {
             1: {
-                "features": {"clothes": ["t-shirt"], "detailed_colors": {"red": 50.0}},
+                "features": {"clothes": ["t-shirt"], "detailed_colors": {"red": 50.0}, "embedding": None},
                 "last_seen": 10
             }
         }
@@ -197,7 +235,7 @@ class TestLostTrackMatching(unittest.TestCase):
         """ทดสอบการลบ track เมื่อหายไปนานเกิน timeout"""
         lost_tracks = {
             1: {
-                "features": {"clothes": ["t-shirt"], "detailed_colors": {"red": 50.0}},
+                "features": {"clothes": ["t-shirt"], "detailed_colors": {"red": 50.0}, "embedding": None},
                 "last_seen": 10
             }
         }
@@ -236,7 +274,8 @@ class TestHybridTrackingIntegration(unittest.TestCase):
             1: {
                 "features": {
                     "detailed_colors": {"red": 50.0, "blue": 30.0, "black": 20.0},
-                    "clothes": ["t-shirt", "jeans"]
+                    "clothes": ["t-shirt", "jeans"],
+                    "embedding": None
                 },
                 "last_seen": 10
             }
@@ -247,7 +286,8 @@ class TestHybridTrackingIntegration(unittest.TestCase):
         byte_id = 200
         new_features = {
             "detailed_colors": {"red": 50.0, "blue": 30.0, "black": 20.0},
-            "clothes": ["t-shirt", "jeans"]
+            "clothes": ["t-shirt", "jeans"],
+            "embedding": None
         }
         
         if byte_id not in id_mapping:
@@ -273,7 +313,8 @@ class TestHybridTrackingIntegration(unittest.TestCase):
         byte_id = 300
         new_features = {
             "detailed_colors": {"red": 100.0},
-            "clothes": ["dress"]
+            "clothes": ["dress"],
+            "embedding": None
         }
         
         if byte_id not in id_mapping:
@@ -293,11 +334,11 @@ class TestHybridTrackingIntegration(unittest.TestCase):
         """ทดสอบ integration การลบ lost tracks"""
         lost_tracks = {
             1: {
-                "features": {"clothes": ["t-shirt"], "detailed_colors": {"red": 50.0}},
+                "features": {"clothes": ["t-shirt"], "detailed_colors": {"red": 50.0}, "embedding": None},
                 "last_seen": 10
             },
             2: {
-                "features": {"clothes": ["jeans"], "detailed_colors": {"blue": 50.0}},
+                "features": {"clothes": ["jeans"], "detailed_colors": {"blue": 50.0}, "embedding": None},
                 "last_seen": 50
             }
         }

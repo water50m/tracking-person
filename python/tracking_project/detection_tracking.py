@@ -14,6 +14,7 @@ from database import DatabaseService
 from reid_utils import (
     calculate_similarity, match_lost_track, update_lost_tracks
 )
+from feature_extractor import ClothingEmbedder
 
 def setup_device():
     """ตั้งค่า device สำหรับการประมวลผล"""
@@ -29,7 +30,8 @@ def load_models(device):
     """โหลดโมเดล YOLO ทั้งหมด"""
     person_model = YOLO('yolo11n.pt')
     custom_model = YOLO(r'E:\ALL_CODE\my-project\models\prepare_dataset.pt')
-    return person_model, custom_model
+    embedder = ClothingEmbedder(model_path=r'E:\ALL_CODE\my-project\models\prepare_dataset.pt', device=device)
+    return person_model, custom_model, embedder
 
 def init_video_capture(video_path):
     """เปิดไฟล์วิดีโอและคืนค่าข้อมูลเบื้องต้น"""
@@ -63,18 +65,20 @@ def detect_clothes(custom_model, person_crop, device, conf_threshold=0.40):
     
     return detected_clothes
 
-def analyze_person_features(person_crop, custom_model, device):
-    """วิเคราะห์คุณสมบัติของคน (เสื้อผ้า + สีละเอียด + กลุ่มสี)"""
+def analyze_person_features(person_crop, custom_model, embedder, device):
+    """วิเคราะห์คุณสมบัติของคน (เสื้อผ้า + สีละเอียด + กลุ่มสี + 768-dim embedding)"""
     clothes = detect_clothes(custom_model, person_crop, device)
     detailed_colors = analyze_detailed_colors(person_crop)
     color_groups = get_color_groups(detailed_colors)
+    embedding, cloth_names = embedder.get_embedding(person_crop)
     
     return {
         "clothes": clothes,
         "detailed_colors": detailed_colors,
         "color_groups": color_groups,
         "primary_detailed_color": get_primary_detailed_color(detailed_colors),
-        "primary_color_group": get_primary_color_group(color_groups)
+        "primary_color_group": get_primary_color_group(color_groups),
+        "embedding": embedding
     }
 
 def update_track_history(track_history, track_id, features, frame_count):
@@ -86,12 +90,13 @@ def update_track_history(track_history, track_id, features, frame_count):
             "color_groups": {},
             "primary_detailed_color": "unknown",
             "primary_color_group": "unknown",
+            "embedding": None,
             "last_seen": frame_count,
             "confidence": 0.0
         }
     
     # อัปเดตเฉพาะถ้ามีข้อมูลใหม่
-    if features["clothes"] or features["detailed_colors"]:
+    if features["clothes"] or features["detailed_colors"] or features.get("embedding") is not None:
         track_history[track_id].update(features)
         track_history[track_id]["last_seen"] = frame_count
         track_history[track_id]["confidence"] = min(1.0, track_history[track_id]["confidence"] + 0.1)
@@ -136,20 +141,20 @@ def draw_clothes_boxes(frame, person_box, clothes_results, custom_model):
                 orig_x2, orig_y2 = x1 + cx2, y1 + cy2
                 cv2.rectangle(frame, (orig_x1, orig_y1), (orig_x2, orig_y2), (0, 255, 0), 1)
 
-def process_single_person(person_model, custom_model, frame, box, track_id, 
+def process_single_person(person_model, custom_model, embedder, frame, box, track_id,
                          track_history, frame_count, device, frame_width, frame_height, db=None):
     """ประมวลผลคนแต่ละคน"""
     x1, y1, x2, y2 = box
-    
+
     # จำกัดกรอบไม่ให้เกินขอบภาพ
     x1, y1 = max(0, x1), max(0, y1)
     x2, y2 = min(frame_width, x2), min(frame_height, y2)
-    
+
     # ครอปภาพคน
     person_crop = frame[y1:y2, x1:x2]
     if person_crop.size > 0:
         # ตรวจจับเสื้อผ้าและวิเคราะห์สี
-        features = analyze_person_features(person_crop, custom_model, device)
+        features = analyze_person_features(person_crop, custom_model, embedder, device)
         
         # อัปเดตประวัติ
         update_track_history(track_history, track_id, features, frame_count)
@@ -188,7 +193,7 @@ def main(enable_db=False):
     """
     # Setup
     device = setup_device()
-    person_model, custom_model = load_models(device)
+    person_model, custom_model, embedder = load_models(device)
     video_path = r'E:\ALL_CODE\my-project\temp_videos\CAM-01_4p-c0-new.mp4'
     cap, frame_width, frame_height = init_video_capture(video_path)
     
@@ -248,7 +253,7 @@ def main(enable_db=False):
                 if byte_id not in id_mapping:
                     if person_crop.size > 0:
                         # วิเคราะห์ features
-                        features = analyze_person_features(person_crop, custom_model, device)
+                        features = analyze_person_features(person_crop, custom_model, embedder, device)
                         
                         # พยายาม match กับ lost_tracks
                         recovered_id = match_lost_track(features, lost_tracks, threshold=0.7)
@@ -266,7 +271,7 @@ def main(enable_db=False):
                 else:
                     # byte_id เดิม → วิเคราะห์ features ตามปกติ
                     if person_crop.size > 0:
-                        features = analyze_person_features(person_crop, custom_model, device)
+                        features = analyze_person_features(person_crop, custom_model, embedder, device)
                 
                 # ใช้ our_id แทน byte_id
                 our_id = id_mapping[byte_id]

@@ -71,19 +71,61 @@ def compare_clothes_lists(clothes1, clothes2):
     return intersection / union
 
 
-def calculate_similarity(features1, features2, color_weight=0.7, clothes_weight=0.3):
+def compare_embeddings(embedding1, embedding2):
+    """
+    คำนวณ cosine similarity ระหว่าง 768-dim embeddings
+    
+    Args:
+        embedding1: numpy array ของ embedding (768-dim)
+        embedding2: numpy array ของ embedding (768-dim)
+    
+    Returns:
+        float: similarity score ระหว่าง 0-1 (1 = เหมือนกันทั้งหมด)
+    """
+    if embedding1 is None or embedding2 is None:
+        return 0.0
+    
+    # Convert to numpy arrays if not already
+    if not isinstance(embedding1, np.ndarray):
+        embedding1 = np.array(embedding1)
+    if not isinstance(embedding2, np.ndarray):
+        embedding2 = np.array(embedding2)
+    
+    # Check dimensions match
+    if len(embedding1) != len(embedding2):
+        return 0.0
+    
+    # Calculate cosine similarity
+    norm1 = np.linalg.norm(embedding1)
+    norm2 = np.linalg.norm(embedding2)
+    
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    
+    similarity = np.dot(embedding1, embedding2) / (norm1 * norm2)
+    return float(similarity)
+
+
+def calculate_similarity(features1, features2, embedding_weight=0.5, color_weight=0.3, clothes_weight=0.2):
     """
     คำนวณความคล้ายคลึงกันระหว่าง 2 sets ของ features
     
     Args:
-        features1: dict ของ features {detailed_colors, clothes, ...}
-        features2: dict ของ features {detailed_colors, clothes, ...}
-        color_weight: น้ำหนักสำหรับสี (default: 0.7)
-        clothes_weight: น้ำหนักสำหรับเสื้อผ้า (default: 0.3)
+        features1: dict ของ features {detailed_colors, clothes, embedding, ...}
+        features2: dict ของ features {detailed_colors, clothes, embedding, ...}
+        embedding_weight: น้ำหนักสำหรับ embedding (default: 0.5)
+        color_weight: น้ำหนักสำหรับสี (default: 0.3)
+        clothes_weight: น้ำหนักสำหรับเสื้อผ้า (default: 0.2)
     
     Returns:
         float: similarity score ระหว่าง 0-1
     """
+    # เปรียบเทียบ embeddings (768-dim)
+    embedding_score = compare_embeddings(
+        features1.get("embedding"),
+        features2.get("embedding")
+    )
+    
     # เปรียบเทียบ detailed colors
     color_score = compare_color_distributions(
         features1.get("detailed_colors", {}),
@@ -96,8 +138,10 @@ def calculate_similarity(features1, features2, color_weight=0.7, clothes_weight=
         features2.get("clothes", [])
     )
     
-    # Weighted sum
-    similarity = color_weight * color_score + clothes_weight * clothes_score
+    # Weighted sum (embedding 50%, color 30%, clothes 20%)
+    similarity = (embedding_weight * embedding_score + 
+                  color_weight * color_score + 
+                  clothes_weight * clothes_score)
     return float(similarity)
 
 
