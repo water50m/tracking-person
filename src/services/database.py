@@ -76,6 +76,10 @@ class DatabaseService:
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS clothes JSONB;")
                 cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS bbox JSONB;")
                 
+                # เพิ่มคอลัมน์สำหรับ Re-ID embedding
+                cur.execute("ALTER TABLE detections ADD COLUMN IF NOT EXISTS embedding JSONB;")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_embedding ON detections USING gin (embedding);")
+                
                 # สร้าง index สำหรับการค้นหาสี
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_detailed_colors ON detections USING gin (detailed_colors);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_color_groups ON detections USING gin (color_groups);")
@@ -114,16 +118,16 @@ class DatabaseService:
             self.conn.rollback()
             print(f"❌ Error updating video status: {e}")
 
-    def insert_detection(self, *, camera_id, track_id, class_name, color_profile=None, image_path, category=None, video_time_offset=None, video_id=None, detailed_colors=None, color_groups=None, primary_detailed_color=None, primary_color_group=None, clothes=None, bbox=None):
+    def insert_detection(self, *, camera_id, track_id, class_name, color_profile=None, image_path, category=None, video_time_offset=None, video_id=None, detailed_colors=None, color_groups=None, primary_detailed_color=None, primary_color_group=None, clothes=None, bbox=None, embedding=None):
         """
-        บันทึกการตรวจจับ โดยรองรับระบบสีละเอียดใหม่
+        บันทึกการตรวจจับ โดยรองรับระบบสีละเอียดใหม่และ Re-ID embedding
         """
         query = """
             INSERT INTO detections (
                 camera_id, track_id, clothing_category, class_name, color_profile,
                 detailed_colors, color_groups, primary_detailed_color, primary_color_group,
-                clothes, bbox, image_path, video_time_offset, video_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                clothes, bbox, image_path, video_time_offset, video_id, embedding
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             self._ensure_connection()
@@ -138,6 +142,7 @@ class DatabaseService:
                     Json(clothes if clothes is not None else []),
                     Json(bbox) if bbox else None,
                     image_path, video_time_offset, video_id,
+                    Json(embedding) if embedding is not None else None,
                 ))
                 self.conn.commit()
         except Exception as e:
@@ -200,6 +205,82 @@ class DatabaseService:
                 return [dict(zip(columns, row)) for row in cur.fetchall()]
         except Exception as e:
             print(f"❌ Search Error: {e}")
+            return []
+
+    def search_by_embedding(self, query_embedding, threshold=0.7, limit=100):
+        """
+        ค้นหาคนที่คล้ายกันด้วย embedding similarity (cosine similarity)
+        
+        Args:
+            query_embedding: list/numpy array ของ embedding (768-dim)
+            threshold: ค่า similarity ขั้นต่ำ (0-1)
+            limit: จำนวนผลลัพธ์สูงสุด
+        """
+        import numpy as np
+        
+        try:
+            self._ensure_connection()
+            with self.conn.cursor() as cur:
+                # ดึงทุก detection ที่มี embedding แล้วคำนวณ cosine similarity
+                cur.execute("""
+                    SELECT * FROM detections 
+                    WHERE embedding IS NOT NULL
+                    ORDER BY timestamp DESC
+                    LIMIT 1000
+                """)
+                columns = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                
+                # คำนวณ cosine similarity
+                query_vec = np.array(query_embedding)
+                query_norm = np.linalg.norm(query_vec)
+                
+                results = []
+                for row in rows:
+                    row_dict = dict(zip(columns, row))
+                    emb = row_dict.get('embedding')
+                    if emb:
+                        emb_vec = np.array(emb)
+                        emb_norm = np.linalg.norm(emb_vec)
+                        if emb_norm > 0 and query_norm > 0:
+                            similarity = np.dot(query_vec, emb_vec) / (query_norm * emb_norm)
+                            if similarity >= threshold:
+                                row_dict['similarity'] = float(similarity)
+                                results.append(row_dict)
+                
+                # Sort by similarity and return top results
+                results.sort(key=lambda x: x['similarity'], reverse=True)
+                return results[:limit]
+                
+        except Exception as e:
+            print(f"❌ Search by Embedding Error: {e}")
+            return []
+
+    def get_person_detections(self, track_id, camera_id=None, limit=100):
+        """
+        ดึงทุก detection ของคนๆ หนึ่ง (ตาม track_id) สำหรับ Re-ID
+        """
+        try:
+            self._ensure_connection()
+            with self.conn.cursor() as cur:
+                if camera_id:
+                    cur.execute("""
+                        SELECT * FROM detections 
+                        WHERE track_id = %s AND camera_id = %s
+                        ORDER BY timestamp DESC
+                        LIMIT %s
+                    """, (track_id, camera_id, limit))
+                else:
+                    cur.execute("""
+                        SELECT * FROM detections 
+                        WHERE track_id = %s
+                        ORDER BY timestamp DESC
+                        LIMIT %s
+                    """, (track_id, limit))
+                columns = [desc[0] for desc in cur.description]
+                return [dict(zip(columns, row)) for row in cur.fetchall()]
+        except Exception as e:
+            print(f"❌ Get Person Detections Error: {e}")
             return []
 
 if __name__ == "__main__":

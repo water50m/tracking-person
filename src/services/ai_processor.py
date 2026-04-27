@@ -17,8 +17,37 @@ from src.services.storage import StorageService
 from src.ai.color_analysis import analyze_color_histogram
 from src.services.stream_manager import stream_manager
 
+# Re-ID and Hybrid Tracking imports
+from src.ai.color_system import (
+    analyze_detailed_colors, get_color_groups,
+    get_primary_detailed_color, get_primary_color_group
+)
+from src.ai.feature_extractor import ClothingEmbedder
+from src.ai.reid_utils import calculate_similarity, match_lost_track, update_lost_tracks
+import numpy as np
+
 # Thread pool สำหรับ I/O งาน upload (ใช้ร่วมกันทั้ง module)
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="upload")
+
+# Global Hybrid Tracking State (per camera)
+# Structure: {camera_id: {"id_mapping": {}, "lost_tracks": {}, "next_our_id": 1, "track_history": {}}}
+_HYBRID_TRACKING_STATE = {}
+
+def _get_hybrid_state(camera_id: str):
+    """Get or create hybrid tracking state for a camera"""
+    if camera_id not in _HYBRID_TRACKING_STATE:
+        _HYBRID_TRACKING_STATE[camera_id] = {
+            "id_mapping": {},      # {byte_id: our_id}
+            "lost_tracks": {},     # {our_id: {"features": {...}, "last_seen": frame}}
+            "next_our_id": 1,
+            "track_history": {}    # {our_id: {"clothes": [], "detailed_colors": {}, ...}}
+        }
+    return _HYBRID_TRACKING_STATE[camera_id]
+
+def _cleanup_hybrid_state(camera_id: str):
+    """Clean up hybrid tracking state when stream stops"""
+    if camera_id in _HYBRID_TRACKING_STATE:
+        del _HYBRID_TRACKING_STATE[camera_id]
 
 async def process_video_task(
     source: str,
@@ -39,6 +68,22 @@ async def process_video_task(
         storage = StorageService()
     except Exception as e:
         print(f"⚠️ StorageService unavailable, thumbnails will not be saved: {e}")
+
+    # 1.5 Setup Re-ID Embedder and Hybrid Tracking State
+    embedder = None
+    try:
+        model_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'prepare_dataset.pt')
+        if os.path.exists(model_path):
+            embedder = ClothingEmbedder(model_path=model_path, device="cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu")
+            print(f"✅ ClothingEmbedder loaded for Re-ID")
+        else:
+            print(f"⚠️ ClothingEmbedder model not found at {model_path}")
+    except Exception as e:
+        print(f"⚠️ ClothingEmbedder initialization failed: {e}")
+
+    # Initialize Hybrid Tracking State
+    hybrid_state = _get_hybrid_state(camera_id)
+    print(f"✅ Hybrid Tracking initialized (camera: {camera_id})")
 
     # ── Timing accumulators ──────────────────────────────────────────
     _t = defaultdict(float)   # สะสมเวลารวมของแต่ละ step
@@ -333,23 +378,76 @@ async def process_video_task(
                             boxes_to_classify = []
 
                             if results and hasattr(results, 'boxes') and results.boxes is not None:
+                                current_byte_ids = []  # Track byte_ids in current frame
+                                
                                 for box in results.boxes:
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                                     new_boxes.append((x1, y1, x2, y2))
                                     
-                                    # Get tracking ID if available
+                                    # Get ByteTrack ID
                                     track_id_obj = getattr(box, 'id', None)
-                                    person_id = int(track_id_obj[0]) if track_id_obj is not None else None
+                                    byte_id = int(track_id_obj[0]) if track_id_obj is not None else None
+                                    current_byte_ids.append(byte_id)
                                     
-                                    # Use cached label or default
-                                    label = track_labels.get(person_id, "Person") if person_id else "Person"
+                                    # Hybrid Tracking: Match byte_id with our persistent ID
+                                    if byte_id is not None:
+                                        if byte_id not in hybrid_state["id_mapping"]:
+                                            # Try to recover from lost_tracks using Re-ID
+                                            person_crop = inference_frame[y1:y2, x1:x2]
+                                            if person_crop.size > 0 and embedder is not None:
+                                                # Extract features for Re-ID
+                                                try:
+                                                    embedding, _ = embedder.get_embedding(person_crop)
+                                                    detailed_colors = analyze_detailed_colors(person_crop)
+                                                    color_groups = get_color_groups(detailed_colors)
+                                                    
+                                                    # Try match with lost tracks
+                                                    new_features = {
+                                                        "detailed_colors": detailed_colors,
+                                                        "color_groups": color_groups,
+                                                        "embedding": embedding.tolist() if embedding is not None else None,
+                                                        "clothes": []  # Will be updated after classification
+                                                    }
+                                                    recovered_id = match_lost_track(new_features, hybrid_state["lost_tracks"], threshold=0.7)
+                                                    
+                                                    if recovered_id is not None:
+                                                        hybrid_state["id_mapping"][byte_id] = recovered_id
+                                                        print(f"🔄 Track recovered: {recovered_id} (byte_id: {byte_id})")
+                                                        del hybrid_state["lost_tracks"][recovered_id]
+                                                    else:
+                                                        # New track
+                                                        hybrid_state["id_mapping"][byte_id] = hybrid_state["next_our_id"]
+                                                        print(f"🆕 New track: {hybrid_state['next_our_id']} (byte_id: {byte_id})")
+                                                        hybrid_state["next_our_id"] += 1
+                                                except Exception as e:
+                                                    print(f"⚠️ Re-ID matching error: {e}")
+                                                    # Fallback: create new track
+                                                    hybrid_state["id_mapping"][byte_id] = hybrid_state["next_our_id"]
+                                                    hybrid_state["next_our_id"] += 1
+                                            else:
+                                                # No embedder or empty crop: create new track
+                                                hybrid_state["id_mapping"][byte_id] = hybrid_state["next_our_id"]
+                                                hybrid_state["next_our_id"] += 1
+                                        
+                                        our_id = hybrid_state["id_mapping"][byte_id]
+                                        label = f"ID:{our_id}"
+                                    else:
+                                        our_id = None
+                                        label = "Person"
+                                    
                                     new_labels.append(label)
                                     
                                     if run_heavy_classifier:
                                         boxes_to_classify.append({
                                             "coords": (x1, y1, x2, y2),
-                                            "person_id": person_id
+                                            "byte_id": byte_id,
+                                            "our_id": our_id
                                         })
+                                
+                                # Update lost_tracks after processing all boxes
+                                if hybrid_state["track_history"]:
+                                    current_our_ids = [hybrid_state["id_mapping"].get(bid) for bid in current_byte_ids if bid in hybrid_state["id_mapping"]]
+                                    update_lost_tracks(hybrid_state["lost_tracks"], hybrid_state["track_history"], current_our_ids, current_count, timeout=60)
 
                             # Immediately update the shared boxes so the main stream can draw them on the NEXT frame
                             setattr(process_video_task, f"_boxes_{camera_id}", new_boxes)
@@ -359,7 +457,8 @@ async def process_video_task(
                             if run_heavy_classifier and boxes_to_classify:
                                 for bdata in boxes_to_classify:
                                     bx1, by1, bx2, by2 = bdata["coords"]
-                                    pid = bdata["person_id"]
+                                    byte_id = bdata["byte_id"]
+                                    our_id = bdata["our_id"]
                                     person_crop = inference_frame[by1:by2, bx1:bx2]
                                     if person_crop.size == 0: continue
 
@@ -369,28 +468,70 @@ async def process_video_task(
                                     )
                                     tock()
                                     
-                                    if pid:
-                                        track_labels[pid] = f"{clothing_type} {confidence:.2f}"
+                                    # Update track_labels for display
+                                    if our_id:
+                                        track_labels[our_id] = f"ID:{our_id} {clothing_type}"
                                         setattr(process_video_task, f"_track_labels_{camera_id}", track_labels)
 
                                     tock = _tick("3_color")
                                     category = "UNKNOWN"
                                     color_profile = {}
+                                    detailed_colors = {}
+                                    color_groups = {}
+                                    primary_detailed_color = "unknown"
+                                    primary_color_group = "unknown"
+                                    embedding = None
+                                    clothes_list = []
 
                                     if clothing_type in ["Dress", "Robe"]:
                                         category = "FULL"
                                         color_profile = analyze_color_histogram(person_crop)
+                                        detailed_colors = analyze_detailed_colors(person_crop)
+                                        color_groups = get_color_groups(detailed_colors)
+                                        primary_detailed_color = get_primary_detailed_color(detailed_colors)
+                                        primary_color_group = get_primary_color_group(color_groups)
                                     elif clothing_type in ["Jeans", "Shorts", "Skirt"]:
                                         category = "BOTTOM"
                                         ph, pw, _ = person_crop.shape
                                         bottom_crop = person_crop[int(ph*0.50):int(ph*0.90), :]
                                         color_profile = analyze_color_histogram(bottom_crop)
+                                        detailed_colors = analyze_detailed_colors(bottom_crop)
+                                        color_groups = get_color_groups(detailed_colors)
+                                        primary_detailed_color = get_primary_detailed_color(detailed_colors)
+                                        primary_color_group = get_primary_color_group(color_groups)
                                     else:
                                         category = "TOP"
                                         ph, pw, _ = person_crop.shape
                                         top_crop = person_crop[int(ph*0.15):int(ph*0.50), :]
                                         color_profile = analyze_color_histogram(top_crop)
+                                        detailed_colors = analyze_detailed_colors(top_crop)
+                                        color_groups = get_color_groups(detailed_colors)
+                                        primary_detailed_color = get_primary_detailed_color(detailed_colors)
+                                        primary_color_group = get_primary_color_group(color_groups)
+                                    
+                                    # Extract embedding for Re-ID if embedder available
+                                    if embedder is not None:
+                                        try:
+                                            emb, cloth_names = embedder.get_embedding(person_crop)
+                                            embedding = emb.tolist() if emb is not None else None
+                                            clothes_list = cloth_names if cloth_names else []
+                                        except Exception as e:
+                                            print(f"⚠️ Embedding extraction error: {e}")
+                                    
                                     tock()
+
+                                    # Update track_history for Re-ID
+                                    if our_id:
+                                        hybrid_state["track_history"][our_id] = {
+                                            "clothes": clothes_list or [clothing_type],
+                                            "detailed_colors": detailed_colors,
+                                            "color_groups": color_groups,
+                                            "primary_detailed_color": primary_detailed_color,
+                                            "primary_color_group": primary_color_group,
+                                            "embedding": embedding,
+                                            "last_seen": current_count,
+                                            "confidence": confidence
+                                        }
 
                                     video_time_offset = current_count / fps
                                     upload_future = None
@@ -407,7 +548,7 @@ async def process_video_task(
                                         bbox_frame = display_frame.copy()
                                         # Draw the specific bounding box for this person
                                         cv2.rectangle(bbox_frame, (bx1, by1), (bx2, by2), (0, 255, 255), 2)
-                                        label = track_labels.get(pid, f"{clothing_type} {confidence:.2f}")
+                                        label = track_labels.get(our_id, f"ID:{our_id} {clothing_type}" if our_id else clothing_type)
                                         cv2.putText(bbox_frame, label, (bx1, by1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                                         
                                         bbox_object_name = f"detections/{camera_id}/{video_id or 'no-video'}/bbox_{current_count}_{uuid.uuid4().hex}.jpg"
@@ -416,7 +557,7 @@ async def process_video_task(
                                         tock()
 
                                     db_queue.put_nowait({
-                                        "track_id":          current_count,
+                                        "track_id":          our_id if our_id else current_count,
                                         "image_path":        "",
                                         "object_name":       object_name,
                                         "upload_future":     upload_future,
@@ -426,14 +567,19 @@ async def process_video_task(
                                         "category":          category,
                                         "class_name":        clothing_type,
                                         "color_profile":     color_profile,
-                                        "bbox":              [bx1, by1, bx2, by2],
+                                        "detailed_colors":   detailed_colors,
+                                        "color_groups":      color_groups,
+                                        "primary_detailed_color": primary_detailed_color,
+                                        "primary_color_group": primary_color_group,
+                                        "clothes":           clothes_list or [clothing_type],
+                                        "embedding":         embedding,
                                         "bbox":              [bx1, by1, bx2, by2],
                                         "video_time_offset": video_time_offset, 
                                         "camera_id":         camera_id,
                                         "video_id":          video_id,
                                     })
 
-                                    print(f"👤 Person classified: {clothing_type} ({category}) (Conf: {confidence:.2f})")
+                                    print(f"👤 Person classified: {clothing_type} ({category}) (Conf: {confidence:.2f}) | ID:{our_id} | Color:{primary_detailed_color}")
                                     
                         except Exception as e:
                             print(f"❌ AI pipeline error: {e}")
@@ -447,9 +593,31 @@ async def process_video_task(
             # Draw bounding boxes from cache so they appear even on skipped frames
             # Draw on a copy if we want the raw frame for other things, but here modifying is fine
             display_frame = frame.copy()
-            for (x1, y1, x2, y2), label in zip(current_boxes, current_labels):
+            
+            # Build detection data for stream_manager (for SSE events)
+            detections_data = []
+            for idx, ((x1, y1, x2, y2), label) in enumerate(zip(current_boxes, current_labels)):
                 cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
                 cv2.putText(display_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                
+                # Extract track_id from label (format: "ID:{our_id} {clothing_type}")
+                track_id = None
+                if label.startswith("ID:"):
+                    try:
+                        track_id = int(label.split()[0].replace("ID:", ""))
+                    except:
+                        pass
+                
+                detections_data.append({
+                    "track_id": track_id,
+                    "label": label,
+                    "bbox": [x1, y1, x2, y2],
+                    "timestamp": time.time()
+                })
+            
+            # Update stream_manager with detection data for SSE
+            if detections_data:
+                stream_manager.update_detections(camera_id, detections_data)
                 
             # Resize to max 720p to save bandwidth for the Stream API
             h, w = display_frame.shape[:2]
@@ -516,3 +684,6 @@ async def process_video_task(
             delattr(process_video_task, f"_boxes_{camera_id}")
         if hasattr(process_video_task, f"_labels_{camera_id}"):
             delattr(process_video_task, f"_labels_{camera_id}")
+        # Clean up hybrid tracking state
+        _cleanup_hybrid_state(camera_id)
+        print(f"🧹 Cleaned up hybrid tracking state for {camera_id}")

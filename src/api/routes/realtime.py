@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from src.api.controllers import DetectionController
+from src.services.stream_manager import stream_manager
 import asyncio
 import json
 from datetime import datetime
@@ -16,26 +17,72 @@ async def events_stream(
 ):
     """
     Server-Sent Events (SSE) endpoint for real-time detection events
+    Streams actual detection data from stream_manager with heartbeat
     """
     
     async def event_generator():
+        # Track last sent detections to avoid duplicates
+        last_detections = {}
+        
         try:
             # Send initial connection message
             msg = json.dumps({
                 "type": "connected",
                 "timestamp": datetime.now().isoformat(),
-                "message": "Event stream connected"
+                "message": "Event stream connected",
+                "camera_ids": camera_id
             })
             yield f"data: {msg}\n\n"
             
-            # Keep connection alive with periodic heartbeat
+            # Send detection events every 2 seconds
+            detection_check_interval = 2.0
+            heartbeat_interval = 30.0
+            
+            last_detection_check = 0
+            last_heartbeat = 0
+            
             while True:
-                await asyncio.sleep(30)  # 30 seconds heartbeat
-                msg = json.dumps({
-                    "type": "heartbeat",
-                    "timestamp": datetime.now().isoformat()
-                })
-                yield f"data: {msg}\n\n"
+                current_time = asyncio.get_event_loop().time()
+                
+                # Check for new detections
+                if current_time - last_detection_check >= detection_check_interval:
+                    last_detection_check = current_time
+                    
+                    # Get detections for requested cameras (or all if not specified)
+                    target_cameras = camera_id if camera_id else list(stream_manager.latest_detections.keys())
+                    
+                    for cam_id in target_cameras:
+                        detections = stream_manager.get_detections(cam_id)
+                        if detections:
+                            # Check if detections changed
+                            detection_hash = hash(json.dumps(detections, sort_keys=True, default=str))
+                            
+                            if last_detections.get(cam_id) != detection_hash:
+                                last_detections[cam_id] = detection_hash
+                                
+                                # Send detection event
+                                msg = json.dumps({
+                                    "type": "detection",
+                                    "timestamp": datetime.now().isoformat(),
+                                    "camera_id": cam_id,
+                                    "payload": {
+                                        "detections": detections,
+                                        "count": len(detections)
+                                    }
+                                })
+                                yield f"data: {msg}\n\n"
+                
+                # Send heartbeat every 30 seconds
+                if current_time - last_heartbeat >= heartbeat_interval:
+                    last_heartbeat = current_time
+                    msg = json.dumps({
+                        "type": "heartbeat",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    yield f"data: {msg}\n\n"
+                
+                # Small sleep to prevent CPU spinning
+                await asyncio.sleep(0.5)
                 
         except asyncio.CancelledError:
             # Client disconnected
